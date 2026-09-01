@@ -5,9 +5,15 @@ const cors = require('cors');
 const { pool } = require('../db/pool');
 
 console.log('Loading auth router...');
-const authRouter = require('./routes/auth');
+const authRouter = require('./routes/auth')
 console.log('Auth router loaded:', typeof authRouter);
+const itemsRouter = require('./routes/items'); 
 
+const loansRouter = require('./routes/loans');
+const custodiansRouter = require('./routes/custodians'); 
+const bulkRouter = require('./routes/bulk');
+const dashboardRouter = require('./routes/dashboard'); 
+const alertsRouter = require('./routes/alerts.js');
 const app = express();
 
 app.use(cors());
@@ -25,6 +31,12 @@ app.get('/health', (req, res) => {
 
 console.log('Mounting auth router at /api/auth');
 app.use('/api/auth', authRouter);
+app.use('/api/items', itemsRouter); 
+app.use('/api/loans', loansRouter); 
+app.use('/api', custodiansRouter); 
+app.use('/api/bulk', bulkRouter);
+app.use('/api/dashboard', dashboardRouter);
+app.use('/api', alertsRouter);
 console.log('Auth router mounted');
 
 const port = process.env.PORT || 4000;
