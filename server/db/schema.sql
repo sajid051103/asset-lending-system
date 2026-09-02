@@ -66,3 +66,16 @@ dismissed_by UUID NOT NULL REFERENCES users(id),
 dismissed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 UNIQUE (loan_id)
 );
+-- fees (stretch feature: late fees + replacement charges)
+CREATE TYPE fee_type AS ENUM ('late', 'replacement');
+
+CREATE TABLE fees (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  loan_id     UUID NOT NULL REFERENCES loans(id) ON DELETE CASCADE,
+  fee_type    fee_type NOT NULL,
+  amount      NUMERIC(10, 2) NOT NULL,
+  waived      BOOLEAN NOT NULL DEFAULT false,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_fees_loan ON fees (loan_id);

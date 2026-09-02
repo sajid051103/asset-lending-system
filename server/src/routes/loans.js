@@ -13,6 +13,19 @@ async function logEvent(loan_id, event_type, actor_id, note = null) {
   );
 }
 
+// Fee amounts — kept simple and fixed since the schema doesn't track
+// per-item value. Late fee is per day overdue, replacement is flat.
+const LATE_FEE_PER_DAY = 10;
+const REPLACEMENT_CHARGE = 500;
+
+// Small helper — logs a row into fees (stretch feature: late fees / replacement charges)
+async function addFee(loan_id, fee_type, amount) {
+  await query(
+    `INSERT INTO fees (loan_id, fee_type, amount) VALUES ($1, $2, $3)`,
+    [loan_id, fee_type, amount]
+  );
+}
+
 // POST /api/loans — request or directly create a loan
 // Members: creates a "requested" loan (no due date yet)
 // Librarians: can also directly create+issue in one step if they pass a due_date
@@ -129,6 +142,7 @@ router.patch('/:id/issue', requireAuth, requireRole('librarian'), async (req, re
 });
 
 // PATCH /api/loans/:id/return — librarian processes a return
+// STRETCH: if the loan was overdue at return time, automatically add a late fee
 router.patch('/:id/return', requireAuth, requireRole('librarian'), async (req, res) => {
   const { id } = req.params;
   const { note } = req.body;
@@ -152,8 +166,25 @@ router.patch('/:id/return', requireAuth, requireRole('librarian'), async (req, r
       [id]
     );
 
+    const returnedLoan = result.rows[0];
     await logEvent(id, 'returned', req.user.id, note || null);
-    return res.json({ loan: result.rows[0] });
+
+    // STRETCH: late fee — only if due_date existed and had already passed
+    // when the item was returned
+    let lateFee = null;
+    if (returnedLoan.due_date) {
+      const dueDate = new Date(returnedLoan.due_date);
+      const returnedAt = new Date(returnedLoan.returned_at);
+      const daysLate = Math.floor((returnedAt - dueDate) / (1000 * 60 * 60 * 24));
+
+      if (daysLate > 0) {
+        const amount = daysLate * LATE_FEE_PER_DAY;
+        await addFee(id, 'late', amount);
+        lateFee = { days_late: daysLate, amount };
+      }
+    }
+
+    return res.json({ loan: returnedLoan, lateFee });
   } catch (err) {
     console.error('Return loan error:', err);
     return res.status(500).json({ error: 'Something went wrong processing the return' });
@@ -161,6 +192,7 @@ router.patch('/:id/return', requireAuth, requireRole('librarian'), async (req, r
 });
 
 // PATCH /api/loans/:id/lost — librarian marks a loan as lost
+// STRETCH: automatically adds a flat replacement charge
 router.patch('/:id/lost', requireAuth, requireRole('librarian'), async (req, res) => {
   const { id } = req.params;
   const { note } = req.body;
@@ -185,10 +217,43 @@ router.patch('/:id/lost', requireAuth, requireRole('librarian'), async (req, res
     );
 
     await logEvent(id, 'lost', req.user.id, note || null);
-    return res.json({ loan: result.rows[0] });
+
+    // STRETCH: flat replacement charge, every time an item is lost
+    await addFee(id, 'replacement', REPLACEMENT_CHARGE);
+
+    return res.json({ loan: result.rows[0], replacementCharge: REPLACEMENT_CHARGE });
   } catch (err) {
     console.error('Mark lost error:', err);
     return res.status(500).json({ error: 'Something went wrong marking the loan lost' });
+  }
+});
+
+// GET /api/loans/:id/fees — STRETCH: view all fees charged against a loan
+router.get('/:id/fees', requireAuth, async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const loanResult = await query('SELECT * FROM loans WHERE id = $1', [id]);
+    const loan = loanResult.rows[0];
+
+    if (!loan) {
+      return res.status(404).json({ error: 'Loan not found' });
+    }
+
+    // Members can only view fees on their own loans
+    if (req.user.role === 'member' && loan.borrower_id !== req.user.id) {
+      return res.status(403).json({ error: 'You can only view fees on your own loans' });
+    }
+
+    const feesResult = await query(
+      `SELECT * FROM fees WHERE loan_id = $1 ORDER BY created_at ASC`,
+      [id]
+    );
+
+    return res.json({ fees: feesResult.rows });
+  } catch (err) {
+    console.error('Get fees error:', err);
+    return res.status(500).json({ error: 'Something went wrong fetching fees' });
   }
 });
 
