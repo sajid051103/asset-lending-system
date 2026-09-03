@@ -1,6 +1,7 @@
 const express = require('express');
 const { query } = require('../../db/pool');
 const { requireAuth, requireRole } = require('../middleware/auth');
+const transporter = require('../utils/mailer');
 
 const router = express.Router();
 
@@ -17,6 +18,11 @@ async function logEvent(loan_id, event_type, actor_id, note = null) {
 // per-item value. Late fee is per day overdue, replacement is flat.
 const LATE_FEE_PER_DAY = 10;
 const REPLACEMENT_CHARGE = 500;
+
+// STRETCH: per-member borrowing limit — a member can have at most this
+// many open (requested/issued) loans at once. Fixed and global, since
+// the README only asks for the concept, not per-user customisation.
+const MAX_ACTIVE_LOANS_PER_MEMBER = 3;
 
 // Small helper — logs a row into fees (stretch feature: late fees / replacement charges)
 async function addFee(loan_id, fee_type, amount) {
@@ -49,6 +55,24 @@ router.post('/', requireAuth, async (req, res) => {
   const finalBorrowerId = actor.role === 'librarian' && borrower_id ? borrower_id : actor.id;
 
   try {
+    // STRETCH: per-member borrowing limit — only enforced when a member
+    // is requesting for themselves, not when a librarian creates a loan
+    // directly (librarians managing loans on someone's behalf aren't
+    // capped by this).
+    if (actor.role === 'member') {
+      const activeLoanCountResult = await query(
+        `SELECT COUNT(*) AS count FROM loans WHERE borrower_id = $1 AND status IN ('requested', 'issued')`,
+        [actor.id]
+      );
+      const activeCount = parseInt(activeLoanCountResult.rows[0].count, 10);
+
+      if (activeCount >= MAX_ACTIVE_LOANS_PER_MEMBER) {
+        return res.status(409).json({
+          error: `You already have ${activeCount} active loans (limit is ${MAX_ACTIVE_LOANS_PER_MEMBER}). Return an item before requesting another.`,
+        });
+      }
+    }
+
     // Check the item exists and isn't archived
     const itemResult = await query('SELECT * FROM catalogue_items WHERE id = $1', [item_id]);
     if (itemResult.rows.length === 0) {
@@ -225,6 +249,45 @@ router.patch('/:id/lost', requireAuth, requireRole('librarian'), async (req, res
   } catch (err) {
     console.error('Mark lost error:', err);
     return res.status(500).json({ error: 'Something went wrong marking the loan lost' });
+  }
+});
+
+// POST /api/loans/:id/send-reminder — STRETCH: email a reminder to the
+// borrower on an issued loan. Librarian-only, matching the pattern used
+// by issue/return/lost above (server-enforced role check, not just UI).
+router.post('/:id/send-reminder', requireAuth, requireRole('librarian'), async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const result = await query(
+      `SELECT loans.due_date, catalogue_items.title AS item_title,
+              users.email AS borrower_email, users.name AS borrower_name
+       FROM loans
+       JOIN catalogue_items ON catalogue_items.id = loans.item_id
+       JOIN users ON users.id = loans.borrower_id
+       WHERE loans.id = $1 AND loans.status = 'issued'`,
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'No issued loan found with this id' });
+    }
+
+    const loan = result.rows[0];
+
+    await transporter.sendMail({
+      from: `"Library" <${process.env.GMAIL_USER}>`,
+      to: loan.borrower_email,
+      subject: `Reminder: Return "${loan.item_title}"`,
+      text: `Hi ${loan.borrower_name}, this is a reminder that "${loan.item_title}" is due on ${loan.due_date}. Please return it soon.`,
+    });
+
+    await logEvent(id, 'note', req.user.id, 'Reminder email sent to borrower');
+
+    return res.json({ success: true, message: 'Reminder sent' });
+  } catch (err) {
+    console.error('Send reminder error:', err);
+    return res.status(500).json({ error: 'Failed to send reminder email' });
   }
 });
 

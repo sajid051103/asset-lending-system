@@ -25,6 +25,10 @@ export default function Loans() {
   const [bulkResult, setBulkResult] = useState(null);
   const [bulkProcessing, setBulkProcessing] = useState(false);
 
+  // send-reminder feedback — uses the app's existing notice-banner style
+  const [notice, setNotice] = useState(null); // { type: 'success' | 'error', message: string }
+  const [sendingReminderId, setSendingReminderId] = useState(null);
+
   async function loadLoans() {
     setLoading(true);
     try {
@@ -43,6 +47,13 @@ export default function Loans() {
     loadLoans();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search, status, sortBy, sortOrder, page]);
+
+  // Auto-dismiss the notice banner after a few seconds
+  useEffect(() => {
+    if (!notice) return;
+    const timer = setTimeout(() => setNotice(null), 4000);
+    return () => clearTimeout(timer);
+  }, [notice]);
 
   async function handleIssue(loanId) {
     if (!dueDateInput) {
@@ -75,6 +86,22 @@ export default function Loans() {
       loadLoans();
     } catch (err) {
       alert(err.response?.data?.error || 'Could not mark this loan as lost');
+    }
+  }
+
+  async function handleSendReminder(loanId) {
+    setSendingReminderId(loanId);
+    setNotice(null);
+    try {
+      await api.post(`/api/loans/${loanId}/send-reminder`, {});
+      setNotice({ type: 'success', message: 'Reminder email sent to the borrower.' });
+    } catch (err) {
+      setNotice({
+        type: 'error',
+        message: err.response?.data?.error || 'Could not send the reminder email.',
+      });
+    } finally {
+      setSendingReminderId(null);
     }
   }
 
@@ -134,6 +161,12 @@ export default function Loans() {
           <button onClick={handleExport}>Export Issued Loans (CSV)</button>
         )}
       </div>
+
+      {notice && (
+        <div className={`notice-banner ${notice.type === 'success' ? 'notice-success' : 'notice-error'}`}>
+          {notice.message}
+        </div>
+      )}
 
       <div className="filters-bar">
         <input
@@ -247,6 +280,12 @@ export default function Loans() {
                         <>
                           <button onClick={() => handleReturn(loan.id)}>Return</button>
                           <button onClick={() => handleLost(loan.id)}>Mark Lost</button>
+                          <button
+                            onClick={() => handleSendReminder(loan.id)}
+                            disabled={sendingReminderId === loan.id}
+                          >
+                            {sendingReminderId === loan.id ? 'Sending...' : 'Send Reminder'}
+                          </button>
                         </>
                       )}
                     </td>
