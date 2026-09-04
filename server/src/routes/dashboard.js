@@ -48,7 +48,17 @@ router.get('/', requireAuth, async (req, res) => {
        ORDER BY item_count DESC`
     );
 
-    // 4. Items returned per week, last 8 weeks
+    // 4. Most borrowed items — top 5 by total loan count (any status, all-time)
+    const mostBorrowedResult = await query(
+      `SELECT catalogue_items.id, catalogue_items.title, COUNT(loans.id) AS borrow_count
+       FROM catalogue_items
+       JOIN loans ON loans.item_id = catalogue_items.id
+       GROUP BY catalogue_items.id, catalogue_items.title
+       ORDER BY borrow_count DESC
+       LIMIT 5`
+    );
+
+    // 5. Items returned per week, last 8 weeks
     const weeklyReturnsResult = await query(
       `SELECT date_trunc('week', returned_at)::date AS week_start, COUNT(*) AS count
        FROM loans
@@ -73,6 +83,11 @@ router.get('/', requireAuth, async (req, res) => {
         librarian_id: r.id,
         librarian_name: r.name,
         itemCount: parseInt(r.item_count, 10),
+      })),
+      mostBorrowed: mostBorrowedResult.rows.map((r) => ({
+        itemId: r.id,
+        title: r.title,
+        borrowCount: parseInt(r.borrow_count, 10),
       })),
       weeklyReturns: weeklyReturnsResult.rows.map((r) => ({
         weekStart: r.week_start,

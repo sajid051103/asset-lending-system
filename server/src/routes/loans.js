@@ -51,6 +51,14 @@ router.post('/', requireAuth, async (req, res) => {
     }
   }
 
+  // Librarians creating a loan on behalf of a specific borrower always issue it
+  // directly — a due_date is required. (There is no supported flow for a
+  // librarian to create a plain "requested" loan for someone else; only a
+  // member requesting for themselves can end up with status 'requested'.)
+  if (actor.role === 'librarian' && borrower_id && !due_date) {
+    return res.status(400).json({ error: 'due_date is required when creating a loan for a borrower' });
+  }
+
   // Members can only request for themselves, not on behalf of others
   const finalBorrowerId = actor.role === 'librarian' && borrower_id ? borrower_id : actor.id;
 
@@ -77,6 +85,9 @@ router.post('/', requireAuth, async (req, res) => {
     const itemResult = await query('SELECT * FROM catalogue_items WHERE id = $1', [item_id]);
     if (itemResult.rows.length === 0) {
       return res.status(404).json({ error: 'Item not found' });
+    }
+    if (itemResult.rows[0].is_archived) {
+      return res.status(409).json({ error: 'Cannot create a loan for an archived item' });
     }
 
     // Enforce goal 4: no open loan (requested/issued) already exists for this item

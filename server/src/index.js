@@ -14,6 +14,8 @@ const custodiansRouter = require('./routes/custodians');
 const bulkRouter = require('./routes/bulk');
 const dashboardRouter = require('./routes/dashboard'); 
 const alertsRouter = require('./routes/alerts.js');
+const userslist =require('./routes/users.js');
+
 const app = express();
 
 app.use(cors());
@@ -25,7 +27,7 @@ app.use((req, res, next) => {
   next();
 });
 
-app.get('/health', (req, res) => {
+app.get('/check', (req, res) => {
   res.json({ status: 'ok' });
 });
 
@@ -37,6 +39,8 @@ app.use('/api', custodiansRouter);
 app.use('/api/bulk', bulkRouter);
 app.use('/api/dashboard', dashboardRouter);
 app.use('/api', alertsRouter);
+app.use('/api/users',userslist);
+
 console.log('Auth router mounted');
 
 const port = process.env.PORT || 4000;
