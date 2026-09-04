@@ -370,7 +370,11 @@ export default function ItemDetail() {
           <tbody>
             {loans.map((loan) => (
               <tr key={loan.id}>
-                <td>{loan.borrower_name}</td>
+                <td>
+                  <Link to={`/loans/${loan.id}`} className="link-styled">
+                    {loan.borrower_name}
+                  </Link>
+                </td>
                 <td style={{ textTransform: 'capitalize' }}>{loan.status}</td>
                 <td>{loan.requested_at?.slice(0, 10)}</td>
                 <td>{loan.due_date || '—'}</td>

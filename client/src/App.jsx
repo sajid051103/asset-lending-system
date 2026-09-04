@@ -10,6 +10,7 @@ import Dashboard from './pages/Dashboard';
 import MyCustodianships from './pages/MyCustodianships';
 import MyLoans from './pages/MyLoans';
 import ItemDetail from './pages/ItemDetail';
+import LoanDetail from './pages/LoanDetail';
 import Signup from './pages/Signup';
 import './App.css';
 
@@ -87,6 +88,15 @@ function AppRoutes() {
   element={
     <ProtectedRoute>
       <ItemDetail />
+    </ProtectedRoute>
+  }
+/>
+
+<Route
+  path="/loans/:id"
+  element={
+    <ProtectedRoute>
+      <LoanDetail />
     </ProtectedRoute>
   }
 />

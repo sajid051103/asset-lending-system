@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import api from '../api/axios';
 
 export default function MyLoans() {
@@ -82,7 +83,11 @@ export default function MyLoans() {
           <tbody>
             {loans.map((loan) => (
               <tr key={loan.id}>
-                <td>{loan.item_title} ({loan.item_code})</td>
+                <td>
+                  <Link to={`/loans/${loan.id}`} className="link-styled">
+                    {loan.item_title} ({loan.item_code})
+                  </Link>
+                </td>
                 <td>
                   {loan.status}
                   {isOverdue(loan) && <span className="badge-overdue"> OVERDUE</span>}

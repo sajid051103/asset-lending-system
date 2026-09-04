@@ -798,3 +798,71 @@
   border-radius: 5px;
   cursor: pointer;
 }
+
+/* ============ Loan Timeline (LoanDetail.jsx) ============ */
+.timeline {
+  list-style: none;
+  margin: 0 0 32px;
+  padding: 0;
+  border-left: 2px solid var(--border);
+}
+
+.timeline-entry {
+  position: relative;
+  padding: 4px 0 22px 26px;
+}
+
+.timeline-entry:last-child {
+  padding-bottom: 4px;
+}
+
+.timeline-entry::before {
+  content: '';
+  position: absolute;
+  left: -7px;
+  top: 8px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg);
+}
+
+.timeline-entry-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.timeline-entry-label {
+  font-weight: 700;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-h);
+}
+
+.timeline-entry-date {
+  font-size: 12px;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.timeline-entry-actor {
+  font-size: 13px;
+  color: var(--text);
+  margin-top: 3px;
+}
+
+.timeline-entry-note {
+  margin-top: 8px;
+  font-size: 13px;
+  font-style: italic;
+  color: var(--text-h);
+  background: var(--code-bg);
+  border: 2px solid var(--border);
+  border-radius: 0;
+  padding: 10px 14px;
+}

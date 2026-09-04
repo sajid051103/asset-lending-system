@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import api from '../api/axios';
 import { useAuth } from '../context/AuthContext';
 
@@ -335,7 +336,11 @@ export default function Loans() {
                       )}
                     </td>
                   )}
-                  <td>{loan.item_title} ({loan.item_code})</td>
+                  <td>
+                    <Link to={`/loans/${loan.id}`} className="link-styled">
+                      {loan.item_title} ({loan.item_code})
+                    </Link>
+                  </td>
                   <td>{loan.borrower_name}</td>
                   <td>
                     {loan.status}
