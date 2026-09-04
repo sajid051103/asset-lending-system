@@ -2,6 +2,7 @@ const express = require('express');
 const { query } = require('../../db/pool');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const transporter = require('../utils/mailer');
+const { router: feesRouter, chargeLateFeeIfNeeded, chargeReplacementFee } = require('./fees');
 
 const router = express.Router();
 
@@ -14,23 +15,10 @@ async function logEvent(loan_id, event_type, actor_id, note = null) {
   );
 }
 
-// Fee amounts — kept simple and fixed since the schema doesn't track
-// per-item value. Late fee is per day overdue, replacement is flat.
-const LATE_FEE_PER_DAY = 10;
-const REPLACEMENT_CHARGE = 500;
-
 // STRETCH: per-member borrowing limit — a member can have at most this
 // many open (requested/issued) loans at once. Fixed and global, since
 // the README only asks for the concept, not per-user customisation.
 const MAX_ACTIVE_LOANS_PER_MEMBER = 3;
-
-// Small helper — logs a row into fees (stretch feature: late fees / replacement charges)
-async function addFee(loan_id, fee_type, amount) {
-  await query(
-    `INSERT INTO fees (loan_id, fee_type, amount) VALUES ($1, $2, $3)`,
-    [loan_id, fee_type, amount]
-  );
-}
 
 // POST /api/loans — request or directly create a loan
 // Members: creates a "requested" loan (no due date yet)
@@ -49,14 +37,6 @@ router.post('/', requireAuth, async (req, res) => {
     if (due_date < today) {
       return res.status(400).json({ error: 'due_date cannot be in the past' });
     }
-  }
-
-  // Librarians creating a loan on behalf of a specific borrower always issue it
-  // directly — a due_date is required. (There is no supported flow for a
-  // librarian to create a plain "requested" loan for someone else; only a
-  // member requesting for themselves can end up with status 'requested'.)
-  if (actor.role === 'librarian' && borrower_id && !due_date) {
-    return res.status(400).json({ error: 'due_date is required when creating a loan for a borrower' });
   }
 
   // Members can only request for themselves, not on behalf of others
@@ -180,7 +160,11 @@ router.patch('/:id/issue', requireAuth, requireRole('librarian'), async (req, re
 // STRETCH: if the loan was overdue at return time, automatically add a late fee
 router.patch('/:id/return', requireAuth, requireRole('librarian'), async (req, res) => {
   const { id } = req.params;
-  const { note } = req.body;
+  // req.body || {} — clients that call this without a JSON body (no
+  // Content-Type header, e.g. curl/Postman without -d) leave req.body
+  // undefined, which used to crash this destructure with a 500 and leak
+  // a stack trace to the caller.
+  const { note } = req.body || {};
 
   try {
     const loanResult = await query('SELECT * FROM loans WHERE id = $1', [id]);
@@ -195,29 +179,23 @@ router.patch('/:id/return', requireAuth, requireRole('librarian'), async (req, r
       });
     }
 
+    // days_late is computed by Postgres as a calendar-date subtraction
+    // (now()::date - due_date), both DATE-typed under the hood — see the
+    // comment on chargeLateFeeIfNeeded in fees.js for why this has to
+    // happen in SQL rather than by diffing JS Date objects.
     const result = await query(
       `UPDATE loans SET status = 'returned', returned_at = now()
-       WHERE id = $1 RETURNING *`,
+       WHERE id = $1
+       RETURNING *, (now()::date - due_date) AS days_late`,
       [id]
     );
 
-    const returnedLoan = result.rows[0];
+    const { days_late: daysLate, ...returnedLoan } = result.rows[0];
     await logEvent(id, 'returned', req.user.id, note || null);
 
     // STRETCH: late fee — only if due_date existed and had already passed
     // when the item was returned
-    let lateFee = null;
-    if (returnedLoan.due_date) {
-      const dueDate = new Date(returnedLoan.due_date);
-      const returnedAt = new Date(returnedLoan.returned_at);
-      const daysLate = Math.floor((returnedAt - dueDate) / (1000 * 60 * 60 * 24));
-
-      if (daysLate > 0) {
-        const amount = daysLate * LATE_FEE_PER_DAY;
-        await addFee(id, 'late', amount);
-        lateFee = { days_late: daysLate, amount };
-      }
-    }
+    const lateFee = await chargeLateFeeIfNeeded(id, daysLate);
 
     return res.json({ loan: returnedLoan, lateFee });
   } catch (err) {
@@ -230,7 +208,8 @@ router.patch('/:id/return', requireAuth, requireRole('librarian'), async (req, r
 // STRETCH: automatically adds a flat replacement charge
 router.patch('/:id/lost', requireAuth, requireRole('librarian'), async (req, res) => {
   const { id } = req.params;
-  const { note } = req.body;
+  // Same guard as /:id/return — see comment there.
+  const { note } = req.body || {};
 
   try {
     const loanResult = await query('SELECT * FROM loans WHERE id = $1', [id]);
@@ -254,9 +233,9 @@ router.patch('/:id/lost', requireAuth, requireRole('librarian'), async (req, res
     await logEvent(id, 'lost', req.user.id, note || null);
 
     // STRETCH: flat replacement charge, every time an item is lost
-    await addFee(id, 'replacement', REPLACEMENT_CHARGE);
+    const replacementCharge = await chargeReplacementFee(id);
 
-    return res.json({ loan: result.rows[0], replacementCharge: REPLACEMENT_CHARGE });
+    return res.json({ loan: result.rows[0], replacementCharge });
   } catch (err) {
     console.error('Mark lost error:', err);
     return res.status(500).json({ error: 'Something went wrong marking the loan lost' });
@@ -299,35 +278,6 @@ router.post('/:id/send-reminder', requireAuth, requireRole('librarian'), async (
   } catch (err) {
     console.error('Send reminder error:', err);
     return res.status(500).json({ error: 'Failed to send reminder email' });
-  }
-});
-
-// GET /api/loans/:id/fees — STRETCH: view all fees charged against a loan
-router.get('/:id/fees', requireAuth, async (req, res) => {
-  const { id } = req.params;
-
-  try {
-    const loanResult = await query('SELECT * FROM loans WHERE id = $1', [id]);
-    const loan = loanResult.rows[0];
-
-    if (!loan) {
-      return res.status(404).json({ error: 'Loan not found' });
-    }
-
-    // Members can only view fees on their own loans
-    if (req.user.role === 'member' && loan.borrower_id !== req.user.id) {
-      return res.status(403).json({ error: 'You can only view fees on your own loans' });
-    }
-
-    const feesResult = await query(
-      `SELECT * FROM fees WHERE loan_id = $1 ORDER BY created_at ASC`,
-      [id]
-    );
-
-    return res.json({ fees: feesResult.rows });
-  } catch (err) {
-    console.error('Get fees error:', err);
-    return res.status(500).json({ error: 'Something went wrong fetching fees' });
   }
 });
 
@@ -482,5 +432,9 @@ router.get('/:id', requireAuth, async (req, res) => {
     return res.status(500).json({ error: 'Something went wrong fetching the loan' });
   }
 });
+
+// The fees read endpoint (GET /:id/fees) now lives in fees.js — mounted
+// on this same router so /api/loans/:id/fees keeps working unchanged.
+router.use(feesRouter);
 
 module.exports = router;
