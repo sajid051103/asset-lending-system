@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import api from '../api/axios';
+import { useAuth } from '../context/AuthContext';
 
 // Human-readable label + icon-ish prefix for each event type in the timeline.
 // 'note' covers system notes (e.g. "Reminder email sent to borrower") as well
@@ -23,12 +24,22 @@ function formatDateTime(isoString) {
 
 export default function LoanDetail() {
   const { id } = useParams();
+  const { user } = useAuth();
 
   const [loan, setLoan] = useState(null);
   const [events, setEvents] = useState([]);
   const [fees, setFees] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+
+  // Waive action feedback + per-row loading state
+  const [notice, setNotice] = useState(null); // { type: 'success' | 'error', text: '...' }
+  const [waivingFeeId, setWaivingFeeId] = useState(null);
+
+  function showNotice(type, text) {
+    setNotice({ type, text });
+    setTimeout(() => setNotice(null), 4000);
+  }
 
   async function loadLoan() {
     setLoading(true);
@@ -61,6 +72,19 @@ export default function LoanDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
+  async function handleWaiveFee(feeId) {
+    setWaivingFeeId(feeId);
+    try {
+      await api.patch(`/api/loans/${id}/fees/${feeId}/waive`);
+      await loadFees();
+      showNotice('success', 'Fee waived.');
+    } catch (err) {
+      showNotice('error', err.response?.data?.error || 'Could not waive this fee.');
+    } finally {
+      setWaivingFeeId(null);
+    }
+  }
+
   function isOverdue() {
     return (
       loan &&
@@ -89,6 +113,12 @@ export default function LoanDetail() {
           {isOverdue() && <span className="badge-overdue"> OVERDUE</span>}
         </span>
       </div>
+
+      {notice && (
+        <div className={`notice-banner notice-${notice.type}`}>
+          {notice.text}
+        </div>
+      )}
 
       <table className="data-table" style={{ marginBottom: '32px' }}>
         <tbody>
@@ -121,6 +151,7 @@ export default function LoanDetail() {
                 <th>Amount</th>
                 <th>Charged</th>
                 <th>Status</th>
+                {user.role === 'librarian' && <th>Actions</th>}
               </tr>
             </thead>
             <tbody>
@@ -130,6 +161,18 @@ export default function LoanDetail() {
                   <td>${Number(fee.amount).toFixed(2)}</td>
                   <td>{formatDateTime(fee.created_at)}</td>
                   <td>{fee.waived ? 'Waived' : 'Outstanding'}</td>
+                  {user.role === 'librarian' && (
+                    <td>
+                      {!fee.waived && (
+                        <button
+                          onClick={() => handleWaiveFee(fee.id)}
+                          disabled={waivingFeeId === fee.id}
+                        >
+                          {waivingFeeId === fee.id ? 'Waiving...' : 'Waive'}
+                        </button>
+                      )}
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>

@@ -1,6 +1,6 @@
 const express = require('express');
 const { query } = require('../../db/pool');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireRole } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -18,15 +18,6 @@ async function addFee(loan_id, fee_type, amount) {
 }
 
 // Charges a late fee if the loan came back after its due_date.
-//
-// daysLate must be computed by Postgres (date - date, both DATE-typed
-// under the hood) rather than by diffing JS Date objects. `due_date` is
-// a plain DATE column with no timezone attached, so when node-postgres
-// turns it into a JS Date it lands on local-server-midnight, not UTC
-// midnight — diffing that against a TIMESTAMPTZ like returned_at silently
-// drifts by the server's UTC offset. Calendar-date subtraction in SQL
-// has no such ambiguity, and it matches the CURRENT_DATE-based "is this
-// overdue" rule used everywhere else in the app (alerts.js, dashboard.js).
 async function chargeLateFeeIfNeeded(loan_id, daysLate) {
   if (daysLate === null || daysLate === undefined || daysLate <= 0) {
     return null;
@@ -42,7 +33,7 @@ async function chargeReplacementFee(loan_id) {
   return REPLACEMENT_CHARGE;
 }
 
-// GET /api/loans/:id/fees — view all fees charged against a loan
+// GET /:id/fees — view all fees charged against a loan
 router.get('/:id/fees', requireAuth, async (req, res) => {
   const { id } = req.params;
 
@@ -54,7 +45,6 @@ router.get('/:id/fees', requireAuth, async (req, res) => {
       return res.status(404).json({ error: 'Loan not found' });
     }
 
-    // Members can only view fees on their own loans
     if (req.user.role === 'member' && loan.borrower_id !== req.user.id) {
       return res.status(403).json({ error: 'You can only view fees on your own loans' });
     }
@@ -68,6 +58,37 @@ router.get('/:id/fees', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('Get fees error:', err);
     return res.status(500).json({ error: 'Something went wrong fetching fees' });
+  }
+});
+
+// PATCH /:id/fees/:feeId/waive — librarian waives a fee
+// Fills a gap where the schema tracks `waived` but nothing could ever set it.
+router.patch('/:id/fees/:feeId/waive', requireAuth, requireRole('librarian'), async (req, res) => {
+  const { id, feeId } = req.params;
+
+  try {
+    const feeResult = await query(
+      'SELECT * FROM fees WHERE id = $1 AND loan_id = $2',
+      [feeId, id]
+    );
+    const fee = feeResult.rows[0];
+
+    if (!fee) {
+      return res.status(404).json({ error: 'Fee not found on this loan' });
+    }
+    if (fee.waived) {
+      return res.status(409).json({ error: 'This fee is already waived' });
+    }
+
+    const result = await query(
+      'UPDATE fees SET waived = true WHERE id = $1 RETURNING *',
+      [feeId]
+    );
+
+    return res.json({ fee: result.rows[0] });
+  } catch (err) {
+    console.error('Waive fee error:', err);
+    return res.status(500).json({ error: 'Something went wrong waiving this fee' });
   }
 });
 

@@ -36,9 +36,13 @@ export default function Loans() {
   const [bulkResult, setBulkResult] = useState(null);
   const [bulkProcessing, setBulkProcessing] = useState(false);
 
-  // send-reminder feedback — uses the app's existing notice-banner style
+  // notice banner — reused for reminder feedback, return/lost fee callouts
   const [notice, setNotice] = useState(null); // { type: 'success' | 'error', message: string }
   const [sendingReminderId, setSendingReminderId] = useState(null);
+
+  function showNotice(type, message) {
+    setNotice({ type, message });
+  }
 
   async function loadLoans() {
     setLoading(true);
@@ -120,7 +124,20 @@ export default function Loans() {
 
   async function handleReturn(loanId) {
     try {
-      await api.patch(`/api/loans/${loanId}/return`, {});
+      const response = await api.patch(`/api/loans/${loanId}/return`, {});
+      const { lateFee } = response.data;
+
+      // lateFee is computed server-side (fees.js) from the calendar-date
+      // difference — we're just displaying what the backend already
+      // decided and charged, not calculating anything here.
+      if (lateFee) {
+        showNotice(
+          'error',
+          `Item returned — ${lateFee.days_late} day(s) late, ₹${lateFee.amount} late fee charged.`
+        );
+      } else {
+        showNotice('success', 'Item returned — no late fee.');
+      }
       loadLoans();
     } catch (err) {
       alert(err.response?.data?.error || 'Could not process the return');
@@ -140,9 +157,12 @@ export default function Loans() {
 
   async function handleLost(loanId) {
     try {
-      await api.patch(`/api/loans/${loanId}/lost`, { note: lostNoteInput });
+      const response = await api.patch(`/api/loans/${loanId}/lost`, { note: lostNoteInput });
+      const { replacementCharge } = response.data;
+
       setLosingLoanId(null);
       setLostNoteInput('');
+      showNotice('error', `Item marked lost — ₹${replacementCharge} replacement charge added.`);
       loadLoans();
     } catch (err) {
       alert(err.response?.data?.error || 'Could not mark this loan as lost');
@@ -154,12 +174,9 @@ export default function Loans() {
     setNotice(null);
     try {
       await api.post(`/api/loans/${loanId}/send-reminder`, {});
-      setNotice({ type: 'success', message: 'Reminder email sent to the borrower.' });
+      showNotice('success', 'Reminder email sent to the borrower.');
     } catch (err) {
-      setNotice({
-        type: 'error',
-        message: err.response?.data?.error || 'Could not send the reminder email.',
-      });
+      showNotice('error', err.response?.data?.error || 'Could not send the reminder email.');
     } finally {
       setSendingReminderId(null);
     }

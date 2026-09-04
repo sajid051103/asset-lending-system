@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Automated tests for the fees feature (late fee, replacement charge,
-# permission checks) and the archived-item loan block.
+# waiving a fee, permission checks) and the archived-item loan block.
 #
 # Requirements: curl, jq, node (for backdating due_date directly in the DB
 # via server/scripts/backdate-loan.js — the API itself refuses to accept
@@ -204,6 +204,56 @@ ARCHIVED_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/api/
   -d "{\"item_id\":\"$ITEM2_ID\",\"borrower_id\":\"$MEMBER_ID\"}")
 
 [ "$ARCHIVED_STATUS" == "409" ] && pass "Loan creation blocked for archived item (409)" || fail "Expected 409, got $ARCHIVED_STATUS"
+
+# ============================================================
+# TEST 6 — Waive a fee (PATCH /:id/fees/:feeId/waive)
+# ============================================================
+echo ""
+echo "== Test 6: Waiving a fee =="
+
+if [ "${LOAN1_ID:-null}" != "null" ] && [ -n "${LOAN1_ID:-}" ]; then
+  # Grab the fee created by Test 1's late return
+  FEES1_RESP=$(curl -s "$BASE_URL/api/loans/$LOAN1_ID/fees" -H "Authorization: Bearer $LIB_TOKEN")
+  FEE1_ID=$(jget "$FEES1_RESP" '.fees[0].id')
+
+  if [ "$FEE1_ID" == "null" ] || [ -z "$FEE1_ID" ]; then
+    fail "Could not find a fee on Loan 1 to waive: $FEES1_RESP"
+  else
+    # 6a — member cannot waive (server-enforced role check)
+    MEMBER_WAIVE_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X PATCH \
+      "$BASE_URL/api/loans/$LOAN1_ID/fees/$FEE1_ID/waive" -H "Authorization: Bearer $MEMBER_TOKEN")
+    [ "$MEMBER_WAIVE_STATUS" == "403" ] && pass "Member blocked from waiving a fee (403)" \
+      || fail "Member waive expected 403, got $MEMBER_WAIVE_STATUS"
+
+    # 6b — librarian waives successfully
+    WAIVE_RESP=$(curl -s -X PATCH "$BASE_URL/api/loans/$LOAN1_ID/fees/$FEE1_ID/waive" \
+      -H "Authorization: Bearer $LIB_TOKEN")
+    WAIVED_FLAG=$(jget "$WAIVE_RESP" '.fee.waived')
+    [ "$WAIVED_FLAG" == "true" ] && pass "Librarian waives the fee (waived: true)" \
+      || fail "Expected fee.waived=true, got $WAIVED_FLAG. Response: $WAIVE_RESP"
+
+    # 6c — waiving the same fee again is rejected (already waived)
+    REWAIVE_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X PATCH \
+      "$BASE_URL/api/loans/$LOAN1_ID/fees/$FEE1_ID/waive" -H "Authorization: Bearer $LIB_TOKEN")
+    [ "$REWAIVE_STATUS" == "409" ] && pass "Re-waiving an already-waived fee is rejected (409)" \
+      || fail "Expected 409 on re-waive, got $REWAIVE_STATUS"
+
+    # 6d — waiving a fee that doesn't belong to this loan is rejected
+    # (Loan 3's replacement fee, addressed via Loan 1's id in the URL)
+    FEES3_RESP=$(curl -s "$BASE_URL/api/loans/$LOAN3_ID/fees" -H "Authorization: Bearer $LIB_TOKEN")
+    FEE3_ID=$(jget "$FEES3_RESP" '.fees[0].id')
+    if [ "$FEE3_ID" != "null" ] && [ -n "$FEE3_ID" ]; then
+      MISMATCH_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X PATCH \
+        "$BASE_URL/api/loans/$LOAN1_ID/fees/$FEE3_ID/waive" -H "Authorization: Bearer $LIB_TOKEN")
+      [ "$MISMATCH_STATUS" == "404" ] && pass "Waiving a fee via the wrong loan_id is rejected (404)" \
+        || fail "Expected 404 for mismatched loan/fee, got $MISMATCH_STATUS"
+    else
+      fail "Could not find Loan 3's replacement fee for the mismatch check"
+    fi
+  fi
+else
+  fail "Skipped Test 6 — Test 1's loan was never created"
+fi
 
 # ============================================================
 # SUMMARY
