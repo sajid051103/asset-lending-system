@@ -4,6 +4,37 @@ import { useAuth } from '../context/AuthContext';
 
 const POLL_INTERVAL_MS = 60_000;
 
+// Every possible loan status — used to zero-fill the status breakdown so a
+// status with zero loans still shows a row instead of quietly disappearing.
+const LOAN_STATUSES = ['requested', 'issued', 'returned', 'lost'];
+
+// Monday of the week containing `date`, matching Postgres's
+// date_trunc('week', ...) (ISO weeks start on Monday).
+function getMonday(date) {
+  const d = new Date(date);
+  const day = d.getUTCDay(); // 0 = Sunday ... 6 = Saturday
+  const diff = (day === 0 ? -6 : 1) - day;
+  d.setUTCDate(d.getUTCDate() + diff);
+  return d;
+}
+
+function formatDate(d) {
+  return d.toISOString().slice(0, 10);
+}
+
+// The last `n` week-start dates (oldest first), ending with the current week —
+// same range the backend's "last 8 weeks" query covers.
+function getLastNWeekStarts(n) {
+  const currentMonday = getMonday(new Date());
+  const weeks = [];
+  for (let i = n - 1; i >= 0; i--) {
+    const d = new Date(currentMonday);
+    d.setUTCDate(d.getUTCDate() - i * 7);
+    weeks.push(formatDate(d));
+  }
+  return weeks;
+}
+
 export default function Dashboard() {
   const { user } = useAuth();
   const [data, setData] = useState(null);
@@ -49,8 +80,27 @@ export default function Dashboard() {
 
   const { headline, statusBreakdown, custodianBreakdown, weeklyReturns, mostBorrowed } = data;
 
+  // Zero-fill the status breakdown so every status has a row, even at count 0,
+  // instead of the backend's GROUP BY silently omitting statuses with no loans.
+  const countsByStatus = Object.fromEntries(statusBreakdown.map((r) => [r.status, r.count]));
+  const filledStatusBreakdown = LOAN_STATUSES.map((status) => ({
+    status,
+    count: countsByStatus[status] || 0,
+  }));
+  const hasAnyStatusData = filledStatusBreakdown.some((r) => r.count > 0);
+
+  // Zero-fill the weekly returns chart so it always shows exactly 8 bars,
+  // even for weeks with no returns, instead of only showing weeks that
+  // happened to have at least one row in the backend's GROUP BY.
+  const countsByWeek = Object.fromEntries(weeklyReturns.map((w) => [w.weekStart, w.count]));
+  const filledWeeklyReturns = getLastNWeekStarts(8).map((weekStart) => ({
+    weekStart,
+    count: countsByWeek[weekStart] || 0,
+  }));
+  const hasAnyWeeklyData = filledWeeklyReturns.some((w) => w.count > 0);
+
   // Find the max weekly count so bar heights scale proportionally
-  const maxWeeklyCount = Math.max(...weeklyReturns.map((w) => w.count), 1);
+  const maxWeeklyCount = Math.max(...filledWeeklyReturns.map((w) => w.count), 1);
 
   return (
     <div className="page">
@@ -84,12 +134,12 @@ export default function Dashboard() {
         <div className="dashboard-grid">
           <div className="dashboard-panel">
             <h2>Loans by Status</h2>
-            {statusBreakdown.length === 0 ? (
+            {!hasAnyStatusData ? (
               <p>No loans yet.</p>
             ) : (
               <table className="data-table">
                 <tbody>
-                  {statusBreakdown.map((row) => (
+                  {filledStatusBreakdown.map((row) => (
                     <tr key={row.status}>
                       <td style={{ textTransform: 'capitalize' }}>{row.status}</td>
                       <td>{row.count}</td>
@@ -144,11 +194,11 @@ export default function Dashboard() {
 
           <div className="dashboard-panel dashboard-panel-wide">
             <h2>Items Returned — Last 8 Weeks</h2>
-            {weeklyReturns.length === 0 ? (
+            {!hasAnyWeeklyData ? (
               <p>No returns recorded in the last 8 weeks.</p>
             ) : (
               <div className="bar-chart">
-                {weeklyReturns.map((week) => (
+                {filledWeeklyReturns.map((week) => (
                   <div key={week.weekStart} className="bar-chart-column">
                     <div
                       className="bar-chart-bar"

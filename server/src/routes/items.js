@@ -68,7 +68,14 @@ router.get('/:id', requireAuth, async (req, res) => {
       [id]
     );
 
-    return res.json({ item, loans: loansResult.rows });
+    // Borrower emails are librarian-only (same policy as /api/users) — a
+    // member opening an item can see who borrowed it (borrower_name), but
+    // not their email address.
+    const loans = req.user.role === 'librarian'
+      ? loansResult.rows
+      : loansResult.rows.map(({ borrower_email, ...loan }) => loan);
+
+    return res.json({ item, loans });
   } catch (err) {
     console.error('Get item error:', err);
     return res.status(500).json({ error: 'Something went wrong fetching the item' });
