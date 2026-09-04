@@ -31,18 +31,23 @@ router.post('/', requireAuth, async (req, res) => {
     return res.status(400).json({ error: 'item_id is required' });
   }
 
-  // Guard: if a librarian is directly issuing with a due_date, it can't be in the past
-  if (due_date) {
-    const today = new Date().toISOString().slice(0, 10);
-    if (due_date < today) {
-      return res.status(400).json({ error: 'due_date cannot be in the past' });
-    }
-  }
-
   // Members can only request for themselves, not on behalf of others
   const finalBorrowerId = actor.role === 'librarian' && borrower_id ? borrower_id : actor.id;
 
   try {
+    // Guard: if a librarian is directly issuing with a due_date, it can't
+    // be in the past. Checked against the DB's CURRENT_DATE (not Node's
+    // new Date().toISOString(), which is UTC and can disagree with the
+    // DB's own "today" depending on server timezone) — same definition
+    // of "today" used everywhere else in the app (alerts, fees, dashboard).
+    if (due_date) {
+      const todayResult = await query(`SELECT CURRENT_DATE::text AS today`);
+      const today = todayResult.rows[0].today;
+      if (due_date < today) {
+        return res.status(400).json({ error: 'due_date cannot be in the past' });
+      }
+    }
+
     // STRETCH: per-member borrowing limit — only enforced when a member
     // is requesting for themselves, not when a librarian creates a loan
     // directly (librarians managing loans on someone's behalf aren't
@@ -120,13 +125,16 @@ router.patch('/:id/issue', requireAuth, requireRole('librarian'), async (req, re
     return res.status(400).json({ error: 'due_date is required to issue a loan' });
   }
 
-  // Guard: due_date cannot be in the past
-  const today = new Date().toISOString().slice(0, 10);
-  if (due_date < today) {
-    return res.status(400).json({ error: 'due_date cannot be in the past' });
-  }
-
   try {
+    // Guard: due_date cannot be in the past — checked against the DB's
+    // CURRENT_DATE, not Node's UTC-converted date. See comment on the
+    // same check in POST / above.
+    const todayResult = await query(`SELECT CURRENT_DATE::text AS today`);
+    const today = todayResult.rows[0].today;
+    if (due_date < today) {
+      return res.status(400).json({ error: 'due_date cannot be in the past' });
+    }
+
     const loanResult = await query('SELECT * FROM loans WHERE id = $1', [id]);
     const loan = loanResult.rows[0];
 
