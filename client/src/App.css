@@ -377,13 +377,14 @@
 }
 
 .data-table a {
-  color: var(--text-h);
-  text-decoration: none;
-  font-weight: 700;
+  color: #b5462f;              
+  text-decoration: underline;  
+  font-weight: 600;
 }
 
+
 .data-table a:hover {
-  color: var(--accent);
+  color: #a03923;
   text-decoration: underline;
 }
 
@@ -689,4 +690,111 @@
 @keyframes slideIn {
   from { opacity: 0; transform: translateY(-8px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+/* ---- Add these rules to app.css ---- */
+
+/* Clickable-looking links (catalogue item titles, back link) */
+.link-styled {
+  color: #b5462f;
+  text-decoration: underline;
+  font-weight: 600;
+}
+
+.back-link {
+  display: inline-block;
+  margin-bottom: 20px;
+  font-size: 14px;
+}
+
+/* Item detail header */
+.item-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.item-header h1 {
+  margin: 0;
+}
+
+.item-subtitle {
+  color: var(--text);
+  margin-top: 4px;
+  margin-bottom: 28px;
+  font-size: 14px;
+}
+
+/* Create Loan card */
+.loan-form-card {
+  border: 1px solid #e2d9c8;
+  border-radius: 8px;
+  padding: 20px;
+  margin-bottom: 28px;
+  background: #fdfaf3;
+}
+
+.loan-form-card p {
+  font-size: 14px;
+  color: #6b6151;
+  margin: 0;
+}
+
+.loan-form-row {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  margin-bottom: 16px;
+}
+
+.loan-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 220px;
+}
+
+.loan-form-field label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: #8a7f6b;
+}
+
+.loan-form-field input,
+.loan-form-field select {
+  padding: 8px 10px;
+  border: 1px solid #d8cdb6;
+  border-radius: 5px;
+  font-size: 14px;
+  background: #fff;
+}
+
+.loan-form-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.btn-primary {
+  background: #b5462f;
+  color: #fff;
+  border: none;
+  padding: 9px 18px;
+  border-radius: 5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-secondary {
+  background: transparent;
+  color: #6b6151;
+  border: 1px solid #d8cdb6;
+  padding: 9px 18px;
+  border-radius: 5px;
+  cursor: pointer;
 }

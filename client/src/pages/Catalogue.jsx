@@ -290,7 +290,9 @@ export default function Catalogue() {
               ) : (
                 <>
                   <td>
-                    <Link to={`/items/${item.id}`}>{item.title}</Link>
+                    <Link to={`/items/${item.id}`} className="link-styled">
+                      {item.title}
+                    </Link>
                   </td>
                   <td>{item.category}</td>
                   <td>{item.code}</td>

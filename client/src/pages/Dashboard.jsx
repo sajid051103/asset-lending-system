@@ -1,31 +1,53 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import api from '../api/axios';
 import { useAuth } from '../context/AuthContext';
+
+const POLL_INTERVAL_MS = 60_000;
 
 export default function Dashboard() {
   const { user } = useAuth();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const isFirstLoad = useRef(true);
 
   useEffect(() => {
+    let cancelled = false;
+
     async function loadDashboard() {
       try {
         const response = await api.get('/api/dashboard');
+        if (cancelled) return;
         setData(response.data);
+        setError('');
       } catch (err) {
+        if (cancelled) return;
         setError('Could not load dashboard');
       } finally {
-        setLoading(false);
+        if (cancelled) return;
+        if (isFirstLoad.current) {
+          setLoading(false);
+          isFirstLoad.current = false;
+        }
       }
     }
+
     loadDashboard();
+    const intervalId = setInterval(loadDashboard, POLL_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+    };
   }, []);
 
   if (loading) return <div style={{ padding: '40px' }}>Loading dashboard...</div>;
-  if (error) return <div style={{ padding: '40px' }}>{error}</div>;
+  // Only show the full error state if we have no data to fall back on —
+  // a failed background poll (every 60s) shouldn't wipe an already-loaded
+  // dashboard, it should just leave the last good data on screen.
+  if (error && !data) return <div style={{ padding: '40px' }}>{error}</div>;
 
-  const { headline, statusBreakdown, custodianBreakdown, weeklyReturns } = data;
+  const { headline, statusBreakdown, custodianBreakdown, weeklyReturns, mostBorrowed } = data;
 
   // Find the max weekly count so bar heights scale proportionally
   const maxWeeklyCount = Math.max(...weeklyReturns.map((w) => w.count), 1);
@@ -89,6 +111,30 @@ export default function Dashboard() {
                     <tr key={row.librarian_id}>
                       <td>{row.librarian_name}</td>
                       <td>{row.itemCount}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          <div className="dashboard-panel dashboard-panel-wide">
+            <h2>Most Borrowed Items</h2>
+            {mostBorrowed.length === 0 ? (
+              <p>No loans recorded yet.</p>
+            ) : (
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Item</th>
+                    <th>Times Borrowed</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {mostBorrowed.map((row) => (
+                    <tr key={row.itemId}>
+                      <td>{row.title}</td>
+                      <td>{row.borrowCount}</td>
                     </tr>
                   ))}
                 </tbody>

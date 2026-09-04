@@ -12,13 +12,23 @@ export default function Loans() {
   // filters
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('');
+  const [itemFilter, setItemFilter] = useState('');
+  const [borrowerFilter, setBorrowerFilter] = useState('');
   const [sortBy, setSortBy] = useState('requested_at');
   const [sortOrder, setSortOrder] = useState('desc');
   const [page, setPage] = useState(1);
 
+  // dropdown options for the item/borrower filters
+  const [itemOptions, setItemOptions] = useState([]);
+  const [borrowerOptions, setBorrowerOptions] = useState([]);
+
   // per-row issue action
   const [issuingLoanId, setIssuingLoanId] = useState(null);
   const [dueDateInput, setDueDateInput] = useState('');
+
+  // per-row "mark lost" action — inline note input, replaces window.prompt()
+  const [losingLoanId, setLosingLoanId] = useState(null);
+  const [lostNoteInput, setLostNoteInput] = useState('');
 
   // bulk return
   const [selectedIds, setSelectedIds] = useState([]);
@@ -32,7 +42,19 @@ export default function Loans() {
   async function loadLoans() {
     setLoading(true);
     try {
-      const params = { search, status, sortBy, sortOrder, page, limit: 10 };
+      const params = {
+        search,
+        status,
+        sortBy,
+        sortOrder,
+        page,
+        limit: 10,
+        ...(itemFilter && { item_id: itemFilter }),
+        // borrower_id is only honoured by the backend for librarians — a
+        // member's own requests are always scoped to themselves anyway,
+        // so there's no point sending it for members.
+        ...(borrowerFilter && user.role === 'librarian' && { borrower_id: borrowerFilter }),
+      };
       const response = await api.get('/api/loans', { params });
       setLoans(response.data.loans);
       setTotal(response.data.total);
@@ -46,7 +68,32 @@ export default function Loans() {
   useEffect(() => {
     loadLoans();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, status, sortBy, sortOrder, page]);
+  }, [search, status, itemFilter, borrowerFilter, sortBy, sortOrder, page]);
+
+  // Load the options for the item/borrower filter dropdowns once on mount.
+  // Item list is available to any logged-in user; the borrower list
+  // endpoint is librarian-only, so members simply won't get that dropdown.
+  useEffect(() => {
+    async function loadFilterOptions() {
+      try {
+        const itemsResponse = await api.get('/api/items');
+        setItemOptions(itemsResponse.data.items);
+      } catch (err) {
+        // Non-fatal — the item filter just won't have options
+      }
+
+      if (user.role === 'librarian') {
+        try {
+          const membersResponse = await api.get('/api/users', { params: { role: 'member' } });
+          setBorrowerOptions(membersResponse.data.users);
+        } catch (err) {
+          // Non-fatal — the borrower filter just won't have options
+        }
+      }
+    }
+    loadFilterOptions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Auto-dismiss the notice banner after a few seconds
   useEffect(() => {
@@ -79,10 +126,22 @@ export default function Loans() {
     }
   }
 
+  // Opens the inline note input for this row (replaces the old window.prompt flow)
+  function openLostForm(loanId) {
+    setLosingLoanId(loanId);
+    setLostNoteInput('');
+  }
+
+  function cancelLostForm() {
+    setLosingLoanId(null);
+    setLostNoteInput('');
+  }
+
   async function handleLost(loanId) {
-    const note = window.prompt('Note (optional):') || '';
     try {
-      await api.patch(`/api/loans/${loanId}/lost`, { note });
+      await api.patch(`/api/loans/${loanId}/lost`, { note: lostNoteInput });
+      setLosingLoanId(null);
+      setLostNoteInput('');
       loadLoans();
     } catch (err) {
       alert(err.response?.data?.error || 'Could not mark this loan as lost');
@@ -183,6 +242,32 @@ export default function Loans() {
           <option value="lost">Lost</option>
         </select>
 
+        <select
+          value={itemFilter}
+          onChange={(e) => { setItemFilter(e.target.value); setPage(1); }}
+        >
+          <option value="">All items</option>
+          {itemOptions.map((item) => (
+            <option key={item.id} value={item.id}>
+              {item.title} ({item.code})
+            </option>
+          ))}
+        </select>
+
+        {user.role === 'librarian' && (
+          <select
+            value={borrowerFilter}
+            onChange={(e) => { setBorrowerFilter(e.target.value); setPage(1); }}
+          >
+            <option value="">All borrowers</option>
+            {borrowerOptions.map((member) => (
+              <option key={member.id} value={member.id}>
+                {member.name}
+              </option>
+            ))}
+          </select>
+        )}
+
         <select value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
           <option value="requested_at">Sort: Requested date</option>
           <option value="due_date">Sort: Due date</option>
@@ -276,10 +361,10 @@ export default function Loans() {
                         </span>
                       )}
 
-                      {loan.status === 'issued' && (
+                      {loan.status === 'issued' && losingLoanId !== loan.id && (
                         <>
                           <button onClick={() => handleReturn(loan.id)}>Return</button>
-                          <button onClick={() => handleLost(loan.id)}>Mark Lost</button>
+                          <button onClick={() => openLostForm(loan.id)}>Mark Lost</button>
                           <button
                             onClick={() => handleSendReminder(loan.id)}
                             disabled={sendingReminderId === loan.id}
@@ -287,6 +372,19 @@ export default function Loans() {
                             {sendingReminderId === loan.id ? 'Sending...' : 'Send Reminder'}
                           </button>
                         </>
+                      )}
+
+                      {losingLoanId === loan.id && (
+                        <span>
+                          <input
+                            type="text"
+                            placeholder="Note (optional)"
+                            value={lostNoteInput}
+                            onChange={(e) => setLostNoteInput(e.target.value)}
+                          />
+                          <button onClick={() => handleLost(loan.id)}>Confirm Lost</button>
+                          <button onClick={cancelLostForm}>Cancel</button>
+                        </span>
                       )}
                     </td>
                   )}
