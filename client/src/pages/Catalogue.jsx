@@ -325,12 +325,25 @@ export default function Catalogue() {
           style={{ minWidth: '260px' }}
         />
         {user.role === 'librarian' && (
-          <label style={{ display: 'inline-flex', alignItems: 'center', fontSize: '14px' }}>
+          <label
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              fontSize: '14px',
+              padding: '9px 14px',
+              border: '1px solid #c9a876',
+              borderRadius: '6px',
+              background: showArchived ? '#f0e4cc' : '#fdfaf3',
+              cursor: 'pointer',
+              userSelect: 'none',
+              whiteSpace: 'nowrap',
+            }}
+          >
             <input
               type="checkbox"
               checked={showArchived}
               onChange={(e) => handleToggleArchived(e.target.checked)}
-              style={{ marginRight: '6px' }}
+              style={{ marginRight: '8px', width: '16px', height: '16px', cursor: 'pointer' }}
             />
             Show archived items
           </label>

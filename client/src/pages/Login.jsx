@@ -67,6 +67,45 @@ export default function Login() {
           </p>
         </div>
       </div>
+
+      {/* Separate box below the login card — demo credentials for
+          reviewers/testers, kept visually distinct from the sign-in form. */}
+      <div
+        className="demo-credentials-box"
+        style={{
+          maxWidth: '420px',
+          margin: '20px auto 0',
+          padding: '16px 20px',
+          border: '1px solid #c9a876',
+          borderRadius: '8px',
+          background: '#fdfaf3',
+        }}
+      >
+        <p style={{ fontSize: '13px', fontWeight: 'bold', marginBottom: '10px' }}>
+          Demo Accounts
+        </p>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+          <thead>
+            <tr>
+              <th style={{ textAlign: 'left', paddingBottom: '6px', borderBottom: '1px solid #c9a876' }}>Role</th>
+              <th style={{ textAlign: 'left', paddingBottom: '6px', borderBottom: '1px solid #c9a876' }}>Email</th>
+              <th style={{ textAlign: 'left', paddingBottom: '6px', borderBottom: '1px solid #c9a876' }}>Password</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td style={{ padding: '6px 0' }}>Librarian</td>
+              <td style={{ padding: '6px 0' }}>librarian1@test.com</td>
+              <td style={{ padding: '6px 0' }}>password123</td>
+            </tr>
+            <tr>
+              <td style={{ padding: '6px 0' }}>Member</td>
+              <td style={{ padding: '6px 0' }}>member1@test.com</td>
+              <td style={{ padding: '6px 0' }}>password123</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
