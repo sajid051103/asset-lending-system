@@ -261,6 +261,36 @@ export default function Catalogue() {
         )}
       </div>
 
+      {/* FIX: Add Item form now opens right under the header/+Add Item
+          button, not further down after the filters bar — so clicking
+          the button visibly opens the form right where you clicked. */}
+      {showAddForm && (
+        <form onSubmit={handleAddItem} className="inline-form">
+          <input
+            placeholder="Title"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            required
+          />
+          <input
+            placeholder="Category"
+            value={category}
+            onChange={(e) => setCategory(e.target.value)}
+            required
+          />
+          <input
+            placeholder="Code"
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+            required
+          />
+          <button type="submit" disabled={addingItem}>
+            {addingItem ? 'Adding...' : 'Save'}
+          </button>
+          {formError && <p className="error-text">{formError}</p>}
+        </form>
+      )}
+
       {notice && (
         <div className={`notice-banner notice-${notice.type}`}>
           {notice.text}
@@ -307,68 +337,17 @@ export default function Catalogue() {
         )}
       </div>
 
-      {/* FIX: Add Item form now lives in its own bordered card, clearly
-          separated from the filters row above and the CSV import below,
-          instead of visually blending into the same block. */}
-      {showAddForm && (
-        <div
-          className="add-item-card"
-          style={{
-            border: '1px solid #ddd',
-            borderRadius: '8px',
-            padding: '16px',
-            marginBottom: '20px',
-            background: '#fafafa',
-          }}
-        >
-          <form onSubmit={handleAddItem} className="inline-form">
-            <input
-              placeholder="Title"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              required
-            />
-            <input
-              placeholder="Category"
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              required
-            />
-            <input
-              placeholder="Code"
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              required
-            />
-            <button type="submit" disabled={addingItem}>
-              {addingItem ? 'Adding...' : 'Save'}
-            </button>
-            {formError && <p className="error-text">{formError}</p>}
-          </form>
-        </div>
-      )}
-
       {user.role === 'librarian' && (
-        <div
-          className="csv-import-card"
-          style={{
-            border: '1px solid #ddd',
-            borderRadius: '8px',
-            padding: '16px',
-            marginBottom: '20px',
-          }}
-        >
-          <form onSubmit={handleCsvImport} className="inline-form">
-            <input
-              type="file"
-              accept=".csv"
-              onChange={(e) => setCsvFile(e.target.files[0])}
-            />
-            <button type="submit" disabled={importing}>
-              {importing ? 'Importing...' : 'Import CSV'}
-            </button>
-          </form>
-        </div>
+        <form onSubmit={handleCsvImport} className="inline-form" style={{ marginBottom: '20px' }}>
+          <input
+            type="file"
+            accept=".csv"
+            onChange={(e) => setCsvFile(e.target.files[0])}
+          />
+          <button type="submit" disabled={importing}>
+            {importing ? 'Importing...' : 'Import CSV'}
+          </button>
+        </form>
       )}
 
       {importResult && (

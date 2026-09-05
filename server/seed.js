@@ -28,6 +28,7 @@ const { LATE_FEE_PER_DAY, REPLACEMENT_CHARGE } = require('./src/routes/fees');
 // ---- small date helpers so scenarios are readable ----
 const daysAgo = (n) => new Date(Date.now() - n * 24 * 60 * 60 * 1000);
 const daysFromNow = (n) => new Date(Date.now() + n * 24 * 60 * 60 * 1000);
+const minutesAgo = (n) => new Date(Date.now() - n * 60 * 1000);
 const dateOnly = (d) => d.toISOString().slice(0, 10); // for DATE columns
 
 async function main() {
@@ -80,6 +81,10 @@ async function main() {
     // Dedicated member for the borrowing-limit demo (goal: stretch B) —
     // kept separate from the general pool so the "already at 3 active
     // loans" scenario below is never accidentally touched by other loops.
+    // IMPORTANT: capMember is intentionally excluded from every other
+    // loop below (bulk random loans, weekly chart history) — it must
+    // only ever appear in Scenario I so it stays at exactly 3 active
+    // loans, matching what the console summary promises at the end.
     const capMember = await insertUser('capmember@test.com', 'Cap Member', 'member');
 
     // ---------------------------------------------------------------
@@ -393,7 +398,10 @@ async function main() {
     // --- Scenario I: borrowing-limit demo (stretch B) — capMember already
     // has exactly MAX_ACTIVE_LOANS_PER_MEMBER (3) open loans. Requesting a
     // 4th item as this member in the live demo should get a 409 with the
-    // "already have 3 active loans" message.
+    // "already have 3 active loans" message. capMember is NEVER used
+    // anywhere else in this script (bulk loop and weekly-chart loop both
+    // draw only from `members`), so this stays exactly 3 no matter what
+    // order the loops run in.
     const capItems = [coolerBox, laptop1, monitor];
     for (let i = 0; i < capItems.length; i++) {
       const item = capItems[i];
@@ -413,12 +421,15 @@ async function main() {
     }
 
     // --- Scenario J: reminder-email history (stretch C) — an overdue loan
-    // with a "reminder sent" note already logged. The app now enforces a
-    // 60-minute cooldown per loan (see REMINDER_COOLDOWN_MINUTES in
+    // with a "reminder sent" note logged 20 minutes ago. The app enforces
+    // a 60-minute cooldown per loan (REMINDER_COOLDOWN_MINUTES in
     // loans.js), checked against the most recent matching loan_events row
     // — so clicking Send Reminder again on this loan immediately in a live
-    // demo should be rejected with a 429, which is a good thing to show:
-    // it proves the earlier duplicate-send gap is actually fixed now.
+    // demo will correctly be rejected with a 429, proving the cooldown
+    // actually works. (Fixed from an earlier version of this seed that
+    // timestamped the note 3 days ago — well outside the 60-minute
+    // window, which would have let a second reminder go through instead
+    // of demonstrating the block.)
     const loanReminded = await insertLoan({
       itemId: gimbal, borrowerId: members[11], status: 'issued',
       requestedAt: daysAgo(12), dueDate: dateOnly(daysAgo(4)),
@@ -426,7 +437,7 @@ async function main() {
     });
     await insertEvent(loanReminded, 'requested', members[11], null, daysAgo(12));
     await insertEvent(loanReminded, 'issued', librarian2, null, daysAgo(11));
-    await insertEvent(loanReminded, 'note', librarian2, 'Reminder email sent to borrower', daysAgo(3));
+    await insertEvent(loanReminded, 'note', librarian2, 'Reminder email sent to borrower', minutesAgo(20));
     itemsWithOpenLoan.add(gimbal);
 
     // --- Scenario K: "most borrowed" item (stretch D) — popularSpeaker
@@ -488,15 +499,20 @@ async function main() {
     //    pagination/search/sort/filter (goal 6) has enough rows to be
     //    worth testing, and the catalogue feels like a real, busy system
     //    in a live demo rather than a handful of curated rows.
+    //
+    //    Borrower pool is `members` only — NOT capMember. capMember must
+    //    stay at exactly the 3 active loans seeded in Scenario I, so it
+    //    can never be picked here as a borrower for a 'requested' or
+    //    'issued' loan (which would silently push it over its own
+    //    borrowing limit and contradict the demo scenario).
     // ---------------------------------------------------------------
     console.log('Inserting bulk random loans for pagination/search/sort testing...');
-    const allMembers = [...members, capMember];
     const statusPool = ['requested', 'issued', 'returned', 'returned', 'returned', 'returned']; // weighted toward returned
 
     const BULK_COUNT = 350;
     for (let i = 0; i < BULK_COUNT; i++) {
       const item = allActiveItems[i % allActiveItems.length];
-      const borrower = allMembers[i % allMembers.length];
+      const borrower = members[i % members.length];
       const librarian = librarians[i % librarians.length];
       let status = statusPool[i % statusPool.length];
 
@@ -568,11 +584,11 @@ async function main() {
     console.log('  A. Fees: Ladder (replacement, still outstanding — waive it live in the demo),');
     console.log('     Circular Saw Kit (replacement, already WAIVED), External Hard Drive (replacement, lost pre-due-date),');
     console.log('     Broken Projector (replacement), + 4 late-fee examples at 1/3/7/14 days late');
-    console.log('  B. Borrowing limit: capmember@test.com already has 3 active loans ->');
-    console.log('     requesting a 4th item as this user should 409');
-    console.log('  C. Reminders: "DJI Ronin Gimbal" loan already has one reminder-sent note —');
-    console.log('     clicking Send Reminder again immediately should now be rejected (429),');
-    console.log('     since a 60-minute per-loan cooldown was added after this scenario was written');
+    console.log('  B. Borrowing limit: capmember@test.com has exactly 3 active loans (and is never');
+    console.log('     used anywhere else in this script) -> requesting a 4th item as this user should 409');
+    console.log('  C. Reminders: "DJI Ronin Gimbal" loan had a reminder sent 20 minutes ago —');
+    console.log('     clicking Send Reminder again right now should be rejected (429) by the');
+    console.log('     60-minute per-loan cooldown');
     console.log('  D. Most borrowed: "Portable Bluetooth Speaker" has 18 loans, far ahead of anything else');
   } catch (err) {
     await client.query('ROLLBACK');
