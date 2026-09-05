@@ -1,5 +1,5 @@
 const express = require('express');
-const { query } = require('../../db/pool');
+const { pool, query } = require('../../db/pool');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const transporter = require('../utils/mailer');
 const { router: feesRouter, chargeLateFeeIfNeeded, chargeReplacementFee } = require('./fees');
@@ -20,6 +20,18 @@ async function logEvent(loan_id, event_type, actor_id, note = null) {
 // the README only asks for the concept, not per-user customisation.
 const MAX_ACTIVE_LOANS_PER_MEMBER = 3;
 
+// Counts a borrower's currently-active loans (requested + issued).
+// Used by POST / to enforce MAX_ACTIVE_LOANS_PER_MEMBER — always against
+// the *target borrower*, never the actor, so it can't be bypassed by
+// having a librarian create the loan instead of the member requesting it.
+async function getActiveLoanCount(borrowerId) {
+  const result = await query(
+    `SELECT COUNT(*) AS count FROM loans WHERE borrower_id = $1 AND status IN ('requested', 'issued')`,
+    [borrowerId]
+  );
+  return parseInt(result.rows[0].count, 10);
+}
+
 // STRETCH: send-reminder cooldown — a librarian can't re-send a reminder
 // for the same loan more than once every 60 minutes. Prevents accidental
 // spam from repeated clicks/requests.
@@ -38,6 +50,8 @@ router.post('/', requireAuth, async (req, res) => {
 
   // Members can only request for themselves, not on behalf of others
   const finalBorrowerId = actor.role === 'librarian' && borrower_id ? borrower_id : actor.id;
+  let client;
+  let transactionOpen = false;
 
   try {
     // Guard: if a librarian is directly issuing with a due_date, it can't
@@ -53,39 +67,80 @@ router.post('/', requireAuth, async (req, res) => {
       }
     }
 
-    // STRETCH: per-member borrowing limit — only enforced when a member
-    // is requesting for themselves, not when a librarian creates a loan
-    // directly (librarians managing loans on someone's behalf aren't
-    // capped by this).
-    if (actor.role === 'member') {
-      const activeLoanCountResult = await query(
-        `SELECT COUNT(*) AS count FROM loans WHERE borrower_id = $1 AND status IN ('requested', 'issued')`,
-        [actor.id]
-      );
-      const activeCount = parseInt(activeLoanCountResult.rows[0].count, 10);
+    // A librarian creating a loan for someone else may only select a member.
+    if (actor.role === 'librarian' && borrower_id) {
+      const borrowerResult = await query('SELECT id, role FROM users WHERE id = $1', [finalBorrowerId]);
+      const borrower = borrowerResult.rows[0];
 
-      if (activeCount >= MAX_ACTIVE_LOANS_PER_MEMBER) {
-        return res.status(409).json({
-          error: `You already have ${activeCount} active loans (limit is ${MAX_ACTIVE_LOANS_PER_MEMBER}). Return an item before requesting another.`,
-        });
+      if (!borrower) {
+        return res.status(404).json({ error: 'Borrower not found' });
+      }
+      if (borrower.role !== 'member') {
+        return res.status(400).json({ error: 'Loans can only be issued to members' });
       }
     }
 
+    client = await pool.connect();
+    await client.query('BEGIN');
+    transactionOpen = true;
+
+    // Locking this user row serializes concurrent creations for the borrower.
+    const lockedBorrowerResult = await client.query(
+      'SELECT id FROM users WHERE id = $1 FOR UPDATE',
+      [finalBorrowerId]
+    );
+    if (lockedBorrowerResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      transactionOpen = false;
+      return res.status(404).json({ error: 'Borrower not found' });
+    }
+
+    // STRETCH: per-member borrowing limit — enforced against the
+    // *borrower this loan is for* (finalBorrowerId), no matter who is
+    // making the API call. Previously this only ran when
+    // actor.role === 'member', which meant a librarian creating a loan
+    // directly on a member's behalf could push them past the cap with
+    // no check at all. That gate is gone: a librarian issuing a loan
+    // for a member who is already at the limit gets blocked exactly
+    // like the member would if they'd requested it themselves.
+    const activeCountResult = await client.query(
+      `SELECT COUNT(*) AS count FROM loans WHERE borrower_id = $1 AND status IN ('requested', 'issued')`,
+      [finalBorrowerId]
+    );
+    const activeCount = parseInt(activeCountResult.rows[0].count, 10);
+
+    if (activeCount >= MAX_ACTIVE_LOANS_PER_MEMBER) {
+      const isSelf = finalBorrowerId === actor.id;
+      await client.query('ROLLBACK');
+      transactionOpen = false;
+      return res.status(409).json({
+        error: isSelf
+          ? `You already have ${activeCount} active loans (limit is ${MAX_ACTIVE_LOANS_PER_MEMBER}). Return an item before requesting another.`
+          : `This borrower already has ${activeCount} active loans (limit is ${MAX_ACTIVE_LOANS_PER_MEMBER}). They must return an item before another can be issued to them.`,
+      });
+    }
+
     // Check the item exists and isn't archived
-    const itemResult = await query('SELECT * FROM catalogue_items WHERE id = $1', [item_id]);
+    const itemResult = await client.query('SELECT * FROM catalogue_items WHERE id = $1', [item_id]);
     if (itemResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      transactionOpen = false;
       return res.status(404).json({ error: 'Item not found' });
     }
     if (itemResult.rows[0].is_archived) {
+      await client.query('ROLLBACK');
+      transactionOpen = false;
       return res.status(409).json({ error: 'Cannot create a loan for an archived item' });
     }
 
     // Enforce goal 4: no open loan (requested/issued) already exists for this item
-    const openLoanResult = await query(
+    const openLoanResult = await client.query(
       `SELECT id FROM loans WHERE item_id = $1 AND status IN ('requested', 'issued')`,
       [item_id]
     );
     if (openLoanResult.rows.length > 0) {
+      await client.query('ROLLBACK');
+      transactionOpen = false;
       return res.status(409).json({ error: 'This item already has an open loan against it' });
     }
 
@@ -93,7 +148,7 @@ router.post('/', requireAuth, async (req, res) => {
     const isDirectIssue = actor.role === 'librarian' && due_date;
     const status = isDirectIssue ? 'issued' : 'requested';
 
-    const result = await query(
+    const result = await client.query(
       `INSERT INTO loans (item_id, borrower_id, status, due_date, issued_at)
        VALUES ($1, $2, $3, $4, $5)
        RETURNING *`,
@@ -107,10 +162,15 @@ router.post('/', requireAuth, async (req, res) => {
     );
 
     const loan = result.rows[0];
+    await client.query('COMMIT');
+    transactionOpen = false;
     await logEvent(loan.id, isDirectIssue ? 'issued' : 'requested', actor.id);
 
     return res.status(201).json({ loan });
   } catch (err) {
+    if (transactionOpen) {
+      await client.query('ROLLBACK');
+    }
     // Database backstop: the partial unique index catches races even
     // if our earlier check above missed one (two requests at once)
     if (err.code === '23505' && err.constraint === 'one_open_loan_per_item') {
@@ -118,10 +178,21 @@ router.post('/', requireAuth, async (req, res) => {
     }
     console.error('Create loan error:', err);
     return res.status(500).json({ error: 'Something went wrong creating the loan' });
+  } finally {
+    if (client) {
+      client.release();
+    }
   }
 });
 
 // PATCH /api/loans/:id/issue — librarian issues a "requested" loan
+//
+// No separate active-loan-limit check is needed here: a "requested" loan
+// already counts toward MAX_ACTIVE_LOANS_PER_MEMBER (see
+// getActiveLoanCount), and issuing it only flips requested -> issued —
+// it doesn't create a new active loan, so the borrower's active count
+// doesn't change. As long as POST / enforced the cap at creation time
+// (fixed above), this endpoint can't be used to sneak a borrower past it.
 router.patch('/:id/issue', requireAuth, requireRole('librarian'), async (req, res) => {
   const { id } = req.params;
   const { due_date } = req.body;
@@ -146,17 +217,17 @@ router.patch('/:id/issue', requireAuth, requireRole('librarian'), async (req, re
     if (!loan) {
       return res.status(404).json({ error: 'Loan not found' });
     }
-    if (loan.status !== 'requested') {
-      return res.status(409).json({
-        error: `Cannot issue a loan with status "${loan.status}" — only "requested" loans can be issued`,
-      });
-    }
-
     const result = await query(
       `UPDATE loans SET status = 'issued', due_date = $1, issued_at = now()
-       WHERE id = $2 RETURNING *`,
+       WHERE id = $2 AND status = 'requested' RETURNING *`,
       [due_date, id]
     );
+
+    if (result.rows.length === 0) {
+      return res.status(409).json({
+        error: 'Cannot issue this loan — only "requested" loans can be issued',
+      });
+    }
 
     await logEvent(id, 'issued', req.user.id);
     return res.json({ loan: result.rows[0] });
@@ -186,22 +257,22 @@ router.patch('/:id/return', requireAuth, requireRole('librarian'), async (req, r
     if (!loan) {
       return res.status(404).json({ error: 'Loan not found' });
     }
-    if (loan.status !== 'issued') {
-      return res.status(409).json({
-        error: `Cannot return a loan with status "${loan.status}" — only "issued" loans can be returned`,
-      });
-    }
-
     // days_late is computed by Postgres as a calendar-date subtraction
     // (now()::date - due_date), both DATE-typed under the hood — see the
     // comment on chargeLateFeeIfNeeded in fees.js for why this has to
     // happen in SQL rather than by diffing JS Date objects.
     const result = await query(
       `UPDATE loans SET status = 'returned', returned_at = now()
-       WHERE id = $1
+       WHERE id = $1 AND status = 'issued'
        RETURNING *, (now()::date - due_date) AS days_late`,
       [id]
     );
+
+    if (result.rows.length === 0) {
+      return res.status(409).json({
+        error: 'Cannot return this loan — only "issued" loans can be returned',
+      });
+    }
 
     const { days_late: daysLate, ...returnedLoan } = result.rows[0];
     await logEvent(id, 'returned', req.user.id, note || null);
@@ -231,17 +302,16 @@ router.patch('/:id/lost', requireAuth, requireRole('librarian'), async (req, res
     if (!loan) {
       return res.status(404).json({ error: 'Loan not found' });
     }
-    // Goal 4: lost is only valid while a loan is "issued" (overdue or not)
-    if (loan.status !== 'issued') {
-      return res.status(409).json({
-        error: `Cannot mark a loan with status "${loan.status}" as lost — only "issued" loans can be marked lost`,
-      });
-    }
-
     const result = await query(
-      `UPDATE loans SET status = 'lost' WHERE id = $1 RETURNING *`,
+      `UPDATE loans SET status = 'lost' WHERE id = $1 AND status = 'issued' RETURNING *`,
       [id]
     );
+
+    if (result.rows.length === 0) {
+      return res.status(409).json({
+        error: 'Cannot mark this loan as lost — only "issued" loans can be marked lost',
+      });
+    }
 
     await logEvent(id, 'lost', req.user.id, note || null);
 
@@ -323,6 +393,66 @@ router.post('/:id/send-reminder', requireAuth, requireRole('librarian'), async (
   } catch (err) {
     console.error('Send reminder error:', err);
     return res.status(500).json({ error: 'Failed to send reminder email' });
+  }
+});
+
+// GET /api/loans/my-limit — the logged-in user's own active-loan count
+// against MAX_ACTIVE_LOANS_PER_MEMBER. Lets the frontend disable/gray out
+// a "Request" button before the user tries and hits the backend's 409,
+// instead of only reacting after a failed request.
+//
+// Registered before GET /:id so Express doesn't treat "my-limit" as an :id.
+router.get('/my-limit', requireAuth, async (req, res) => {
+  try {
+    const activeCount = await getActiveLoanCount(req.user.id);
+    return res.json({
+      activeCount,
+      limit: MAX_ACTIVE_LOANS_PER_MEMBER,
+      atLimit: activeCount >= MAX_ACTIVE_LOANS_PER_MEMBER,
+    });
+  } catch (err) {
+    console.error('Get my-limit error:', err);
+    return res.status(500).json({ error: 'Something went wrong fetching your loan limit' });
+  }
+});
+
+// GET /api/loans/member-limits — librarian-only, bulk active-loan count for
+// every member in one query. Powers the "Create Loan" borrower dropdown in
+// ItemDetail.jsx, so a librarian can see (and the UI can disable) a member
+// who is already at MAX_ACTIVE_LOANS_PER_MEMBER before submitting a loan
+// for them, rather than only finding out from the backend's 409 afterward.
+//
+// A single LEFT JOIN + FILTER does this for every member in one round
+// trip instead of the frontend calling my-limit once per member.
+router.get('/member-limits', requireAuth, requireRole('librarian'), async (req, res) => {
+  try {
+    const result = await query(
+      `SELECT users.id, users.name, users.email,
+              COUNT(loans.id) FILTER (WHERE loans.status IN ('requested', 'issued')) AS active_count
+       FROM users
+       LEFT JOIN loans ON loans.borrower_id = users.id
+                       AND loans.status IN ('requested', 'issued')
+       WHERE users.role = 'member'
+       GROUP BY users.id, users.name, users.email
+       ORDER BY users.name ASC`
+    );
+
+    const members = result.rows.map((row) => {
+      const activeCount = parseInt(row.active_count, 10);
+      return {
+        id: row.id,
+        name: row.name,
+        email: row.email,
+        activeCount,
+        limit: MAX_ACTIVE_LOANS_PER_MEMBER,
+        atLimit: activeCount >= MAX_ACTIVE_LOANS_PER_MEMBER,
+      };
+    });
+
+    return res.json({ members, limit: MAX_ACTIVE_LOANS_PER_MEMBER });
+  } catch (err) {
+    console.error('Get member-limits error:', err);
+    return res.status(500).json({ error: 'Something went wrong fetching member loan limits' });
   }
 });
 

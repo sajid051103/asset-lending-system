@@ -81,7 +81,11 @@ router.get('/items/:itemId/custodians', requireAuth, async (req, res) => {
       [itemId]
     );
 
-    return res.json({ custodians: result.rows });
+    const custodians = req.user.role === 'librarian'
+      ? result.rows
+      : result.rows.map(({ email, ...custodian }) => custodian);
+
+    return res.json({ custodians });
   } catch (err) {
     console.error('List custodians error:', err);
     return res.status(500).json({ error: 'Something went wrong fetching custodians' });

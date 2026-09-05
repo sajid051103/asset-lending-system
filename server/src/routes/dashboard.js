@@ -49,10 +49,16 @@ router.get('/', requireAuth, async (req, res) => {
     );
 
     // 4. Most borrowed items — top 5 by total loan count (any status, all-time)
+    // Archived items are excluded: this list is meant to guide decisions
+    // about the *current* catalogue (what to stock more of, what's
+    // popular right now), and an archived item is no longer borrowable —
+    // showing it here would misrepresent it as still active, and could
+    // push a genuinely active item out of the top 5.
     const mostBorrowedResult = await query(
       `SELECT catalogue_items.id, catalogue_items.title, COUNT(loans.id) AS borrow_count
        FROM catalogue_items
        JOIN loans ON loans.item_id = catalogue_items.id
+       WHERE catalogue_items.is_archived = false
        GROUP BY catalogue_items.id, catalogue_items.title
        ORDER BY borrow_count DESC
        LIMIT 5`

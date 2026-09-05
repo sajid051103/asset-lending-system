@@ -83,9 +83,13 @@ async function main() {
     const capMember = await insertUser('capmember@test.com', 'Cap Member', 'member');
 
     // ---------------------------------------------------------------
-    // 2. CATALOGUE ITEMS — ~20 items (was 7), several categories, a
-    //    handful archived, one item deliberately over-borrowed for the
-    //    "most borrowed" dashboard panel (stretch D).
+    // 2. CATALOGUE ITEMS — ~29 active items across 7 categories (was 19
+    //    across 5), several categories, a handful archived, one item
+    //    deliberately over-borrowed for the "most borrowed" dashboard
+    //    panel (stretch D). Bumped up from the previous pass specifically
+    //    so the catalogue search box (client-side filter over title/
+    //    category/code) has enough rows, and enough category variety,
+    //    to actually be worth typing into during a demo.
     // ---------------------------------------------------------------
     console.log('Inserting catalogue items...');
     const insertItem = async (title, category, code, isArchived = false) => {
@@ -119,6 +123,20 @@ async function main() {
     // below, so it visibly tops the "Most Borrowed" panel (stretch D).
     const popularSpeaker = await insertItem('Portable Bluetooth Speaker', 'AV Equipment', 'AV-005');
 
+    // --- New items (this pass) — round out Electronics/Outdoor and add
+    // two brand-new categories (Office, Sports) so category filtering and
+    // the search box have real variety to demonstrate, not just 5 groups
+    // repeating the same few items each.
+    const hardDrive = await insertItem('External Hard Drive 2TB', 'Electronics', 'EL-005');
+    const headphones = await insertItem('Noise-Cancelling Headphones', 'Electronics', 'EL-006');
+    const campStove = await insertItem('Camping Stove', 'Outdoor', 'OD-003');
+    const backpack = await insertItem('Hiking Backpack 60L', 'Outdoor', 'OD-004');
+    const standingDesk = await insertItem('Standing Desk Converter', 'Office', 'OF-001');
+    const keyboardCombo = await insertItem('Wireless Keyboard & Mouse Combo', 'Office', 'OF-002');
+    const whiteboard = await insertItem('Portable Whiteboard', 'Office', 'OF-003');
+    const badmintonSet = await insertItem('Badminton Racket Set', 'Sports', 'SP-001');
+    const yogaMatSet = await insertItem('Yoga Mat Set (x4)', 'Sports', 'SP-002');
+
     // Archived items — kept out of the default catalogue view, but their
     // loan history stays intact (goal 2).
     const oldLaptop = await insertItem('Old Loaner Laptop', 'Electronics', 'EL-000', true);
@@ -129,6 +147,8 @@ async function main() {
       camera, tripod, lensKit, gimbal, projector, mic, speaker, mixer,
       drill, ladder, sawKit, toolbox, laptop1, laptop2, tablet, monitor,
       tent, coolerBox, popularSpeaker,
+      hardDrive, headphones, campStove, backpack, standingDesk,
+      keyboardCombo, whiteboard, badmintonSet, yogaMatSet,
     ];
 
     // ---------------------------------------------------------------
@@ -157,8 +177,12 @@ async function main() {
     await insertCustodian(laptop1, librarian2);
     await insertCustodian(tent, librarian3);
     await insertCustodian(popularSpeaker, librarian2);
+    await insertCustodian(standingDesk, librarian1);
+    await insertCustodian(badmintonSet, librarian3);
     // drill, ladder, mic, speaker, laptop2, tablet, monitor, coolerBox,
-    // lensKit deliberately left with no custodian — edge case still covered
+    // lensKit, hardDrive, headphones, campStove, backpack, keyboardCombo,
+    // whiteboard, yogaMatSet deliberately left with no custodian — edge
+    // case (an item nobody is responsible for) still covered.
 
     // ---------------------------------------------------------------
     // 4. LOANS + LOAN EVENTS — named scenarios first (one per goal /
@@ -275,7 +299,8 @@ async function main() {
     await insertEvent(loanNotOverdue, 'issued', librarian1, null, daysAgo(1));
     itemsWithOpenLoan.add(mic);
 
-    // --- Scenario F: LOST item — replacement charge (stretch A) ---
+    // --- Scenario F: LOST item (already overdue when lost) — replacement
+    // charge (stretch A) ---
     const loanLost = await insertLoan({
       itemId: ladder, borrowerId: members[2], status: 'lost',
       requestedAt: daysAgo(20), dueDate: dateOnly(daysAgo(10)),
@@ -305,6 +330,22 @@ async function main() {
     await insertEvent(loanLostWaived, 'lost', librarian1, 'Blade missing, reported by member', daysAgo(12));
     await insertFee(loanLostWaived, 'replacement', REPLACEMENT_CHARGE, true, daysAgo(12));
     await insertEvent(loanLostWaived, 'note', librarian1, 'Replacement charge waived — member is a long-time volunteer', daysAgo(11));
+
+    // --- Scenario F3: LOST item that was NOT yet overdue when it was
+    // marked lost. Goal 4 explicitly says a loan "can be marked Lost
+    // while it is Issued, whether or not it has become overdue" — F and
+    // F2 above only cover the "already overdue" half of that sentence.
+    // This one has a due date still in the future at the moment it's
+    // marked lost, so it demonstrates the other half.
+    const loanLostNotOverdue = await insertLoan({
+      itemId: hardDrive, borrowerId: members[5], status: 'lost',
+      requestedAt: daysAgo(4), dueDate: dateOnly(daysFromNow(4)),
+      issuedAt: daysAgo(3), returnedAt: null,
+    });
+    await insertEvent(loanLostNotOverdue, 'requested', members[5], null, daysAgo(4));
+    await insertEvent(loanLostNotOverdue, 'issued', librarian3, null, daysAgo(3));
+    await insertEvent(loanLostNotOverdue, 'lost', librarian3, 'Dropped in a lake on a field trip, due date was not even up yet', daysAgo(1));
+    await insertFee(loanLostNotOverdue, 'replacement', REPLACEMENT_CHARGE, false, daysAgo(1));
 
     // --- Scenario G: archived item WITH loan history (goal 2 check) ---
     const archivedLoan = await insertLoan({
@@ -415,7 +456,10 @@ async function main() {
     //    looks like real usage instead of a flat 1-2-3 staircase.
     // ---------------------------------------------------------------
     console.log('Inserting returned-loan history for the dashboard chart...');
-    const chartItems = [camera, tripod, drill, mic, speaker, laptop2, tablet, coolerBox];
+    const chartItems = [
+      camera, tripod, drill, mic, speaker, laptop2, tablet, coolerBox,
+      backpack, whiteboard,
+    ];
     const weeklyReturnCounts = [4, 7, 3, 8, 5, 2, 6, 4]; // varies week to week
     let n = 0;
     for (let week = 0; week < 8; week++) {
@@ -515,13 +559,15 @@ async function main() {
     console.log('  - Projector: old returned+dismissed loan, then re-issued and overdue again -> alert REAPPEARS (goal 10)');
     console.log('  - Drill: currently just "requested", nothing issued yet (goal 4)');
     console.log('  - Mic: issued, due in 5 days -> control case, should never alert (goal 4)');
+    console.log('  - External Hard Drive: marked Lost BEFORE its due date arrived -> confirms Lost does not require Overdue (goal 4)');
     console.log('  - Old Loaner Laptop / Broken Projector / Retired DSLR: archived, but loan history intact (goal 2)');
     console.log('  - Canon 90D Camera: 3 custodians at once (goal 5)');
+    console.log('  - Catalogue now spans 7 categories (Cameras, AV Equipment, Tools, Electronics, Outdoor, Office, Sports) across 29 active + 3 archived items, for the catalogue search box');
     console.log('----------------------------------------');
     console.log('Stretch feature scenarios:');
     console.log('  A. Fees: Ladder (replacement, still outstanding — waive it live in the demo),');
-    console.log('     Circular Saw Kit (replacement, already WAIVED), Broken Projector (replacement),');
-    console.log('     + 4 late-fee examples at 1/3/7/14 days late');
+    console.log('     Circular Saw Kit (replacement, already WAIVED), External Hard Drive (replacement, lost pre-due-date),');
+    console.log('     Broken Projector (replacement), + 4 late-fee examples at 1/3/7/14 days late');
     console.log('  B. Borrowing limit: capmember@test.com already has 3 active loans ->');
     console.log('     requesting a 4th item as this user should 409');
     console.log('  C. Reminders: "DJI Ronin Gimbal" loan already has one reminder-sent note —');
