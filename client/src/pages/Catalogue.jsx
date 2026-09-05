@@ -6,13 +6,15 @@ import { Link } from 'react-router-dom';
 export default function Catalogue() {
   const { user } = useAuth();
   const [items, setItems] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showArchived, setShowArchived] = useState(false);
 
-  // Client-side search — /api/items returns the full (unpaginated) list,
-  // so filtering here avoids needing a backend search param. Matches
-  // against title, category, and code, case-insensitive.
+  // Search now goes to the backend (see loadItems) instead of filtering
+  // client-side, so it matches across the whole catalogue rather than
+  // just whatever page happens to be loaded.
   const [search, setSearch] = useState('');
 
   const [showAddForm, setShowAddForm] = useState(false);
@@ -55,9 +57,15 @@ export default function Catalogue() {
     setLoading(true);
     try {
       const response = await api.get('/api/items', {
-        params: showArchived ? { includeArchived: 'true' } : {},
+        params: {
+          ...(showArchived ? { includeArchived: 'true' } : {}),
+          ...(search.trim() ? { search: search.trim() } : {}),
+          page,
+          limit: 20,
+        },
       });
       setItems(response.data.items);
+      setTotal(response.data.total);
     } catch (err) {
       setError('Could not load catalogue items');
     } finally {
@@ -75,10 +83,22 @@ export default function Catalogue() {
     }
   }
 
+  // Debounce the search box so we're not firing a request on every
+  // keystroke — waits 300ms after the user stops typing, and resets to
+  // page 1 since the result set has changed.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setPage(1);
+      loadItems();
+    }, 300);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search]);
+
   useEffect(() => {
     loadItems();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showArchived]);
+  }, [showArchived, page]);
 
   useEffect(() => {
     if (user.role === 'member') {
@@ -86,6 +106,13 @@ export default function Catalogue() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Toggling "show archived" changes the underlying result set, so jumping
+  // back to page 1 avoids landing on a now-out-of-range page.
+  function handleToggleArchived(checked) {
+    setShowArchived(checked);
+    setPage(1);
+  }
 
   async function handleAddItem(e) {
     e.preventDefault();
@@ -150,11 +177,13 @@ export default function Catalogue() {
       await api.post('/api/loans', { item_id: itemId });
       showNotice('success', `Requested "${itemTitle}" successfully.`);
       loadMyLimit(); // the count just went up by one
+      loadItems(); // refresh so has_open_loan flips and the Request button disappears
     } catch (err) {
       showNotice('error', err.response?.data?.error || 'Could not request this item.');
       // The backend rejected it (e.g. someone else's request landed first,
       // or the count was stale) — refresh so the button reflects reality.
       loadMyLimit();
+      loadItems();
     } finally {
       setRequestingItemId(null);
     }
@@ -216,21 +245,10 @@ export default function Catalogue() {
     }
   }
 
+  const totalPages = Math.max(Math.ceil(total / 20), 1);
+
   if (loading) return <div className="loading-state">Loading catalogue...</div>;
   if (error) return <div className="loading-state">{error}</div>;
-
-  // Filter is purely client-side against whatever `items` currently holds
-  // (which already reflects the showArchived toggle from the API call).
-  const normalizedSearch = search.trim().toLowerCase();
-  const filteredItems = normalizedSearch
-    ? items.filter((item) => {
-        return (
-          item.title?.toLowerCase().includes(normalizedSearch) ||
-          item.category?.toLowerCase().includes(normalizedSearch) ||
-          item.code?.toLowerCase().includes(normalizedSearch)
-        );
-      })
-    : items;
 
   return (
     <div className="page">
@@ -269,7 +287,7 @@ export default function Catalogue() {
             <input
               type="checkbox"
               checked={showArchived}
-              onChange={(e) => setShowArchived(e.target.checked)}
+              onChange={(e) => handleToggleArchived(e.target.checked)}
               style={{ marginRight: '6px' }}
             />
             Show archived items
@@ -346,7 +364,7 @@ export default function Catalogue() {
           </tr>
         </thead>
         <tbody>
-          {filteredItems.map((item) => (
+          {items.map((item) => (
             <tr key={item.id}>
               {editingItemId === item.id ? (
                 <>
@@ -400,6 +418,18 @@ export default function Catalogue() {
                     <span className={`status-badge status-${item.is_archived ? 'archived' : 'active'}`}>
                       {item.is_archived ? 'Archived' : 'Active'}
                     </span>
+                    {/* Availability is separate from archived/active — an
+                        active item can still be unavailable because it's
+                        currently out on loan. Shown right here so a member
+                        never has to open the item or scroll down to find out. */}
+                    {!item.is_archived && (
+                      <span
+                        className={`status-badge ${item.has_open_loan ? 'status-issued' : 'status-active'}`}
+                        style={{ marginLeft: '6px' }}
+                      >
+                        {item.has_open_loan ? 'On Loan' : 'Available'}
+                      </span>
+                    )}
                   </td>
                   {user.role === 'librarian' && (
                     <td>
@@ -424,7 +454,11 @@ export default function Catalogue() {
                   )}
                   {user.role === 'member' && (
                     <td>
-                      {!item.is_archived && (
+                      {/* Only show Request when the item is actually
+                          requestable — not archived AND no open loan
+                          against it already. Otherwise there's nothing to
+                          click, instead of a button that always 409s. */}
+                      {!item.is_archived && !item.has_open_loan && (
                         <button
                           onClick={() => handleRequest(item.id, item.title)}
                           disabled={myLimit?.atLimit || requestingItemId === item.id}
@@ -442,10 +476,14 @@ export default function Catalogue() {
         </tbody>
       </table>
 
-      {items.length === 0 && <p>No items in the catalogue yet.</p>}
-      {items.length > 0 && filteredItems.length === 0 && (
-        <p>No items match "{search}".</p>
-      )}
+      {items.length === 0 && !search && <p>No items in the catalogue yet.</p>}
+      {items.length === 0 && search && <p>No items match "{search}".</p>}
+
+      <div className="pagination">
+        <button disabled={page <= 1} onClick={() => setPage(page - 1)}>Previous</button>
+        <span>Page {page} of {totalPages} ({total} total)</span>
+        <button disabled={page >= totalPages} onClick={() => setPage(page + 1)}>Next</button>
+      </div>
     </div>
   );
 }
