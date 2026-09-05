@@ -10,11 +10,17 @@ export default function Catalogue() {
   const [error, setError] = useState('');
   const [showArchived, setShowArchived] = useState(false);
 
+  // Client-side search — /api/items returns the full (unpaginated) list,
+  // so filtering here avoids needing a backend search param. Matches
+  // against title, category, and code, case-insensitive.
+  const [search, setSearch] = useState('');
+
   const [showAddForm, setShowAddForm] = useState(false);
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState('');
   const [code, setCode] = useState('');
   const [formError, setFormError] = useState('');
+  const [addingItem, setAddingItem] = useState(false);
 
   const [csvFile, setCsvFile] = useState(null);
   const [importResult, setImportResult] = useState(null);
@@ -26,6 +32,16 @@ export default function Catalogue() {
   const [editCategory, setEditCategory] = useState('');
   const [editCode, setEditCode] = useState('');
   const [editError, setEditError] = useState('');
+  const [savingItemId, setSavingItemId] = useState(null);
+  const [archivingItemId, setArchivingItemId] = useState(null);
+  const [restoringItemId, setRestoringItemId] = useState(null);
+
+  // STRETCH: per-member borrowing limit — read from GET /api/loans/my-limit
+  // instead of hardcoding MAX_ACTIVE_LOANS_PER_MEMBER here, so the frontend
+  // never drifts out of sync with the backend's actual limit. Member-only;
+  // librarians don't have a personal borrowing cap.
+  const [myLimit, setMyLimit] = useState(null); // { activeCount, limit, atLimit }
+  const [requestingItemId, setRequestingItemId] = useState(null);
 
   // Replaces browser alert() with an inline banner message
   const [notice, setNotice] = useState(null); // { type: 'success' | 'error', text: '...' }
@@ -49,14 +65,32 @@ export default function Catalogue() {
     }
   }
 
+  async function loadMyLimit() {
+    try {
+      const response = await api.get('/api/loans/my-limit');
+      setMyLimit(response.data);
+    } catch (err) {
+      // Non-fatal — if this fails the Request button just falls back to
+      // relying on the backend's 409, same as before this feature existed.
+    }
+  }
+
   useEffect(() => {
     loadItems();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showArchived]);
 
+  useEffect(() => {
+    if (user.role === 'member') {
+      loadMyLimit();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function handleAddItem(e) {
     e.preventDefault();
     setFormError('');
+    setAddingItem(true);
     try {
       await api.post('/api/items', { title, category, code });
       setTitle('');
@@ -67,6 +101,8 @@ export default function Catalogue() {
       showNotice('success', `"${title}" added to the catalogue.`);
     } catch (err) {
       setFormError(err.response?.data?.error || 'Something went wrong adding the item');
+    } finally {
+      setAddingItem(false);
     }
   }
 
@@ -97,29 +133,54 @@ export default function Catalogue() {
   }
 
   async function handleRequest(itemId, itemTitle) {
+    // Belt-and-braces: the button is already disabled at the cap, but a
+    // stale myLimit (e.g. two tabs open) could let a click through — the
+    // backend's 409 is still the real guard, this just avoids a pointless
+    // round trip when we already know it'll fail.
+    if (myLimit?.atLimit) {
+      showNotice(
+        'error',
+        `You already have ${myLimit.activeCount} active loans (limit is ${myLimit.limit}). Return an item before requesting another.`
+      );
+      return;
+    }
+
+    setRequestingItemId(itemId);
     try {
       await api.post('/api/loans', { item_id: itemId });
       showNotice('success', `Requested "${itemTitle}" successfully.`);
+      loadMyLimit(); // the count just went up by one
     } catch (err) {
       showNotice('error', err.response?.data?.error || 'Could not request this item.');
+      // The backend rejected it (e.g. someone else's request landed first,
+      // or the count was stale) — refresh so the button reflects reality.
+      loadMyLimit();
+    } finally {
+      setRequestingItemId(null);
     }
   }
 
   async function handleArchive(itemId) {
+    setArchivingItemId(itemId);
     try {
       await api.patch(`/api/items/${itemId}/archive`);
       loadItems();
     } catch (err) {
       showNotice('error', err.response?.data?.error || 'Could not archive this item.');
+    } finally {
+      setArchivingItemId(null);
     }
   }
 
   async function handleRestore(itemId) {
+    setRestoringItemId(itemId);
     try {
       await api.patch(`/api/items/${itemId}/restore`);
       loadItems();
     } catch (err) {
       showNotice('error', err.response?.data?.error || 'Could not restore this item.');
+    } finally {
+      setRestoringItemId(null);
     }
   }
 
@@ -138,6 +199,7 @@ export default function Catalogue() {
 
   async function handleSaveEdit(itemId) {
     setEditError('');
+    setSavingItemId(itemId);
     try {
       await api.patch(`/api/items/${itemId}`, {
         title: editTitle,
@@ -149,11 +211,26 @@ export default function Catalogue() {
       showNotice('success', 'Item updated successfully.');
     } catch (err) {
       setEditError(err.response?.data?.error || 'Could not update this item');
+    } finally {
+      setSavingItemId(null);
     }
   }
 
   if (loading) return <div className="loading-state">Loading catalogue...</div>;
   if (error) return <div className="loading-state">{error}</div>;
+
+  // Filter is purely client-side against whatever `items` currently holds
+  // (which already reflects the showArchived toggle from the API call).
+  const normalizedSearch = search.trim().toLowerCase();
+  const filteredItems = normalizedSearch
+    ? items.filter((item) => {
+        return (
+          item.title?.toLowerCase().includes(normalizedSearch) ||
+          item.category?.toLowerCase().includes(normalizedSearch) ||
+          item.code?.toLowerCase().includes(normalizedSearch)
+        );
+      })
+    : items;
 
   return (
     <div className="page">
@@ -172,17 +249,33 @@ export default function Catalogue() {
         </div>
       )}
 
-      {user.role === 'librarian' && (
-        <label style={{ display: 'block', marginBottom: '16px', fontSize: '14px' }}>
-          <input
-            type="checkbox"
-            checked={showArchived}
-            onChange={(e) => setShowArchived(e.target.checked)}
-            style={{ marginRight: '6px' }}
-          />
-          Show archived items
-        </label>
+      {user.role === 'member' && myLimit && (
+        <div className={`notice-banner ${myLimit.atLimit ? 'notice-error' : 'notice-info'}`}>
+          {myLimit.atLimit
+            ? `You have ${myLimit.activeCount} of ${myLimit.limit} active loans — you're at your limit. Return an item before requesting another.`
+            : `You have ${myLimit.activeCount} of ${myLimit.limit} active loans.`}
+        </div>
       )}
+
+      <div className="filters-bar" style={{ marginBottom: '16px' }}>
+        <input
+          placeholder="Search title, category or code..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          style={{ minWidth: '260px' }}
+        />
+        {user.role === 'librarian' && (
+          <label style={{ display: 'inline-flex', alignItems: 'center', fontSize: '14px' }}>
+            <input
+              type="checkbox"
+              checked={showArchived}
+              onChange={(e) => setShowArchived(e.target.checked)}
+              style={{ marginRight: '6px' }}
+            />
+            Show archived items
+          </label>
+        )}
+      </div>
 
       {showAddForm && (
         <form onSubmit={handleAddItem} className="inline-form">
@@ -204,7 +297,9 @@ export default function Catalogue() {
             onChange={(e) => setCode(e.target.value)}
             required
           />
-          <button type="submit">Save</button>
+          <button type="submit" disabled={addingItem}>
+            {addingItem ? 'Adding...' : 'Save'}
+          </button>
           {formError && <p className="error-text">{formError}</p>}
         </form>
       )}
@@ -251,7 +346,7 @@ export default function Catalogue() {
           </tr>
         </thead>
         <tbody>
-          {items.map((item) => (
+          {filteredItems.map((item) => (
             <tr key={item.id}>
               {editingItemId === item.id ? (
                 <>
@@ -282,8 +377,13 @@ export default function Catalogue() {
                     </span>
                   </td>
                   <td>
-                    <button onClick={() => handleSaveEdit(item.id)}>Save</button>
-                    <button onClick={cancelEdit}>Cancel</button>
+                    <button
+                      onClick={() => handleSaveEdit(item.id)}
+                      disabled={savingItemId === item.id}
+                    >
+                      {savingItemId === item.id ? 'Saving...' : 'Save'}
+                    </button>
+                    <button onClick={cancelEdit} disabled={savingItemId === item.id}>Cancel</button>
                     {editError && <p className="error-text">{editError}</p>}
                   </td>
                 </>
@@ -305,16 +405,33 @@ export default function Catalogue() {
                     <td>
                       <button onClick={() => startEdit(item)}>Edit</button>
                       {item.is_archived ? (
-                        <button onClick={() => handleRestore(item.id)}>Restore</button>
+                        <button
+                          onClick={() => handleRestore(item.id)}
+                          disabled={restoringItemId === item.id}
+                        >
+                          {restoringItemId === item.id ? 'Restoring...' : 'Restore'}
+                        </button>
                       ) : (
-                        <button className="btn-danger" onClick={() => handleArchive(item.id)}>Archive</button>
+                        <button
+                          className="btn-danger"
+                          onClick={() => handleArchive(item.id)}
+                          disabled={archivingItemId === item.id}
+                        >
+                          {archivingItemId === item.id ? 'Archiving...' : 'Archive'}
+                        </button>
                       )}
                     </td>
                   )}
                   {user.role === 'member' && (
                     <td>
                       {!item.is_archived && (
-                        <button onClick={() => handleRequest(item.id, item.title)}>Request</button>
+                        <button
+                          onClick={() => handleRequest(item.id, item.title)}
+                          disabled={myLimit?.atLimit || requestingItemId === item.id}
+                          title={myLimit?.atLimit ? `You're at your ${myLimit.limit}-loan limit` : undefined}
+                        >
+                          {requestingItemId === item.id ? 'Requesting...' : 'Request'}
+                        </button>
                       )}
                     </td>
                   )}
@@ -326,6 +443,9 @@ export default function Catalogue() {
       </table>
 
       {items.length === 0 && <p>No items in the catalogue yet.</p>}
+      {items.length > 0 && filteredItems.length === 0 && (
+        <p>No items match "{search}".</p>
+      )}
     </div>
   );
 }

@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
 import api from '../api/axios';
 
 export default function MyLoans() {
@@ -26,8 +25,19 @@ export default function MyLoans() {
     loadLoans();
   }, [sortBy, sortOrder]);
 
+  // Local calendar date as YYYY-MM-DD — NOT new Date().toISOString(), which
+  // converts to UTC first and can land on the wrong day depending on the
+  // browser's timezone and time of day. See same fix in Loans.jsx.
+  function todayLocalDate() {
+    const d = new Date();
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
   function isOverdue(loan) {
-    return loan.status === 'issued' && loan.due_date && loan.due_date < new Date().toISOString().slice(0, 10);
+    return loan.status === 'issued' && loan.due_date && loan.due_date < todayLocalDate();
   }
 
   // Clicking a sortable header: same column -> flip direction, new column -> start ascending
@@ -83,11 +93,7 @@ export default function MyLoans() {
           <tbody>
             {loans.map((loan) => (
               <tr key={loan.id}>
-                <td>
-                  <Link to={`/loans/${loan.id}`} className="link-styled">
-                    {loan.item_title} ({loan.item_code})
-                  </Link>
-                </td>
+                <td>{loan.item_title} ({loan.item_code})</td>
                 <td>
                   {loan.status}
                   {isOverdue(loan) && <span className="badge-overdue"> OVERDUE</span>}

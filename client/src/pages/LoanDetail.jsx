@@ -158,7 +158,7 @@ export default function LoanDetail() {
               {fees.map((fee) => (
                 <tr key={fee.id}>
                   <td style={{ textTransform: 'capitalize' }}>{fee.fee_type}</td>
-                  <td>${Number(fee.amount).toFixed(2)}</td>
+                  <td>₹{Number(fee.amount).toFixed(2)}</td>
                   <td>{formatDateTime(fee.created_at)}</td>
                   <td>{fee.waived ? 'Waived' : 'Outstanding'}</td>
                   {user.role === 'librarian' && (

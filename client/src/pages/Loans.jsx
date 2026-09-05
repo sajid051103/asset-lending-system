@@ -26,10 +26,13 @@ export default function Loans() {
   // per-row issue action
   const [issuingLoanId, setIssuingLoanId] = useState(null);
   const [dueDateInput, setDueDateInput] = useState('');
+  const [submittingIssueLoanId, setSubmittingIssueLoanId] = useState(null);
 
   // per-row "mark lost" action — inline note input, replaces window.prompt()
   const [losingLoanId, setLosingLoanId] = useState(null);
   const [lostNoteInput, setLostNoteInput] = useState('');
+  const [returningLoanId, setReturningLoanId] = useState(null);
+  const [markingLostLoanId, setMarkingLostLoanId] = useState(null);
 
   // bulk return
   const [selectedIds, setSelectedIds] = useState([]);
@@ -143,6 +146,7 @@ export default function Loans() {
       alert('Please pick a due date first');
       return;
     }
+    setSubmittingIssueLoanId(loanId);
     try {
       await api.patch(`/api/loans/${loanId}/issue`, { due_date: dueDateInput });
       setIssuingLoanId(null);
@@ -150,10 +154,13 @@ export default function Loans() {
       loadLoans();
     } catch (err) {
       alert(err.response?.data?.error || 'Could not issue this loan');
+    } finally {
+      setSubmittingIssueLoanId(null);
     }
   }
 
   async function handleReturn(loanId) {
+    setReturningLoanId(loanId);
     try {
       const response = await api.patch(`/api/loans/${loanId}/return`, {});
       const { lateFee } = response.data;
@@ -172,6 +179,8 @@ export default function Loans() {
       loadLoans();
     } catch (err) {
       alert(err.response?.data?.error || 'Could not process the return');
+    } finally {
+      setReturningLoanId(null);
     }
   }
 
@@ -187,6 +196,7 @@ export default function Loans() {
   }
 
   async function handleLost(loanId) {
+    setMarkingLostLoanId(loanId);
     try {
       const response = await api.patch(`/api/loans/${loanId}/lost`, { note: lostNoteInput });
       const { replacementCharge } = response.data;
@@ -197,6 +207,8 @@ export default function Loans() {
       loadLoans();
     } catch (err) {
       alert(err.response?.data?.error || 'Could not mark this loan as lost');
+    } finally {
+      setMarkingLostLoanId(null);
     }
   }
 
@@ -443,14 +455,29 @@ export default function Loans() {
                             min={todayLocalDate()}
                             onChange={(e) => setDueDateInput(e.target.value)}
                           />
-                          <button onClick={() => handleIssue(loan.id)}>Confirm</button>
+                          <button
+                            onClick={() => handleIssue(loan.id)}
+                            disabled={submittingIssueLoanId === loan.id}
+                          >
+                            {submittingIssueLoanId === loan.id ? 'Issuing...' : 'Confirm'}
+                          </button>
                         </span>
                       )}
 
                       {loan.status === 'issued' && losingLoanId !== loan.id && (
                         <>
-                          <button onClick={() => handleReturn(loan.id)}>Return</button>
-                          <button onClick={() => openLostForm(loan.id)}>Mark Lost</button>
+                          <button
+                            onClick={() => handleReturn(loan.id)}
+                            disabled={returningLoanId === loan.id || markingLostLoanId === loan.id}
+                          >
+                            {returningLoanId === loan.id ? 'Returning...' : 'Return'}
+                          </button>
+                          <button
+                            onClick={() => openLostForm(loan.id)}
+                            disabled={returningLoanId === loan.id || markingLostLoanId === loan.id}
+                          >
+                            Mark Lost
+                          </button>
                           <button
                             onClick={() => handleSendReminder(loan.id)}
                             disabled={sendingReminderId === loan.id || getRemainingSeconds(loan.id) > 0}
@@ -477,8 +504,13 @@ export default function Loans() {
                             value={lostNoteInput}
                             onChange={(e) => setLostNoteInput(e.target.value)}
                           />
-                          <button onClick={() => handleLost(loan.id)}>Confirm Lost</button>
-                          <button onClick={cancelLostForm}>Cancel</button>
+                          <button
+                            onClick={() => handleLost(loan.id)}
+                            disabled={markingLostLoanId === loan.id}
+                          >
+                            {markingLostLoanId === loan.id ? 'Marking Lost...' : 'Confirm Lost'}
+                          </button>
+                          <button onClick={cancelLostForm} disabled={markingLostLoanId === loan.id}>Cancel</button>
                         </span>
                       )}
                     </td>

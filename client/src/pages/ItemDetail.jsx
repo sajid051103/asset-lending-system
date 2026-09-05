@@ -21,6 +21,13 @@ export default function ItemDetail() {
   const [loanFormError, setLoanFormError] = useState('');
   const [submittingLoan, setSubmittingLoan] = useState(false);
 
+  // STRETCH: per-member borrowing limit — GET /api/loans/member-limits
+  // returns every member's active-loan count in one call, so the
+  // borrower dropdown can show "(3/3 — at limit)" and disable that
+  // option, instead of the librarian only finding out from the
+  // backend's 409 after picking someone and submitting.
+  const [memberLimits, setMemberLimits] = useState({}); // { [memberId]: { activeCount, limit, atLimit } }
+
   // Custodians — everyone can see the list, only librarians can add/remove
   const [custodians, setCustodians] = useState([]);
   const [custodiansLoading, setCustodiansLoading] = useState(true);
@@ -74,6 +81,17 @@ export default function ItemDetail() {
   // so we don't need an extra request just to know whether to disable the form.
   const hasOpenLoan = loans.some((loan) => loan.status === 'requested' || loan.status === 'issued');
 
+  async function loadMemberLimits() {
+    try {
+      const response = await api.get('/api/loans/member-limits');
+      const byId = Object.fromEntries(response.data.members.map((m) => [m.id, m]));
+      setMemberLimits(byId);
+    } catch (err) {
+      // Non-fatal — if this fails, the dropdown just shows plain names
+      // and the backend's 409 remains the real guard on submit.
+    }
+  }
+
   async function openLoanForm() {
     setShowLoanForm(true);
     setLoanFormError('');
@@ -88,6 +106,9 @@ export default function ItemDetail() {
         setMembersLoading(false);
       }
     }
+    // Refresh limits every time the form opens, since counts change
+    // whenever loans are requested/issued/returned elsewhere in the app.
+    loadMemberLimits();
   }
 
   function closeLoanForm() {
@@ -96,6 +117,12 @@ export default function ItemDetail() {
     setDueDate('');
     setLoanFormError('');
   }
+
+  // The currently-selected member's limit info, if we have it. Used to
+  // disable the submit button and show a clear reason before the
+  // librarian even tries to submit.
+  const selectedMemberLimit = selectedMemberId ? memberLimits[selectedMemberId] : null;
+  const selectedMemberAtLimit = Boolean(selectedMemberLimit?.atLimit);
 
   async function handleCreateLoan(e) {
     e.preventDefault();
@@ -107,6 +134,17 @@ export default function ItemDetail() {
     }
     if (!dueDate) {
       setLoanFormError('Please choose a due date.');
+      return;
+    }
+    // Belt-and-braces: the submit button is already disabled at this
+    // point, but memberLimits could be stale (e.g. another loan was
+    // issued to this member in another tab since the form opened) —
+    // the backend's 409 is still the real guard, this just avoids
+    // submitting a request we already know will be rejected.
+    if (selectedMemberAtLimit) {
+      setLoanFormError(
+        `${selectedMemberLimit.name} already has ${selectedMemberLimit.activeCount} active loans (limit is ${selectedMemberLimit.limit}). They must return an item before another can be issued.`
+      );
       return;
     }
 
@@ -122,6 +160,9 @@ export default function ItemDetail() {
       showNotice('success', 'Loan issued successfully.');
     } catch (err) {
       setLoanFormError(err.response?.data?.error || 'Could not create this loan.');
+      // The backend rejected it — refresh limits so the dropdown reflects
+      // reality (e.g. if this failed specifically due to the cap).
+      loadMemberLimits();
     } finally {
       setSubmittingLoan(false);
     }
@@ -190,6 +231,18 @@ export default function ItemDetail() {
     }
   }
 
+  // Local calendar date as YYYY-MM-DD — NOT new Date().toISOString(), which
+  // converts to UTC first and can be off by a day depending on the
+  // browser's timezone. Used as the due-date picker's min so "today" here
+  // matches what the librarian actually sees on their clock.
+  function todayLocalDate() {
+    const d = new Date();
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
   if (loading) return <div style={{ padding: '40px' }}>Loading...</div>;
   if (error) return <div style={{ padding: '40px' }}>{error}</div>;
 
@@ -239,12 +292,26 @@ export default function ItemDetail() {
                       onChange={(e) => setSelectedMemberId(e.target.value)}
                     >
                       <option value="">Select a member...</option>
-                      {members.map((m) => (
-                        <option key={m.id} value={m.id}>
-                          {m.name} ({m.email})
-                        </option>
-                      ))}
+                      {members.map((m) => {
+                        const limitInfo = memberLimits[m.id];
+                        const atLimit = Boolean(limitInfo?.atLimit);
+                        const countLabel = limitInfo
+                          ? ` — ${limitInfo.activeCount}/${limitInfo.limit}${atLimit ? ' at limit' : ''}`
+                          : '';
+                        return (
+                          <option key={m.id} value={m.id} disabled={atLimit}>
+                            {m.name} ({m.email}){countLabel}
+                          </option>
+                        );
+                      })}
                     </select>
+                  )}
+                  {selectedMemberAtLimit && (
+                    <p className="error-text" style={{ marginTop: '6px' }}>
+                      {selectedMemberLimit.name} already has {selectedMemberLimit.activeCount} active
+                      loans (limit is {selectedMemberLimit.limit}). They must return an item before
+                      another can be issued.
+                    </p>
                   )}
                 </div>
 
@@ -254,13 +321,17 @@ export default function ItemDetail() {
                     type="date"
                     value={dueDate}
                     onChange={(e) => setDueDate(e.target.value)}
-                    min={new Date().toISOString().slice(0, 10)}
+                    min={todayLocalDate()}
                   />
                 </div>
               </div>
 
               <div className="loan-form-actions">
-                <button type="submit" disabled={submittingLoan} className="btn-primary">
+                <button
+                  type="submit"
+                  disabled={submittingLoan || selectedMemberAtLimit}
+                  className="btn-primary"
+                >
                   {submittingLoan ? 'Issuing...' : 'Issue Loan'}
                 </button>
                 <button type="button" onClick={closeLoanForm} className="btn-secondary">
@@ -326,7 +397,7 @@ export default function ItemDetail() {
           <thead>
             <tr>
               <th>Name</th>
-              <th>Email</th>
+              {user.role === 'librarian' && <th>Email</th>}
               {user.role === 'librarian' && <th>Actions</th>}
             </tr>
           </thead>
@@ -334,7 +405,7 @@ export default function ItemDetail() {
             {custodians.map((custodian) => (
               <tr key={custodian.id}>
                 <td>{custodian.name}</td>
-                <td>{custodian.email}</td>
+                {user.role === 'librarian' && <td>{custodian.email}</td>}
                 {user.role === 'librarian' && (
                   <td>
                     <button
@@ -370,11 +441,7 @@ export default function ItemDetail() {
           <tbody>
             {loans.map((loan) => (
               <tr key={loan.id}>
-                <td>
-                  <Link to={`/loans/${loan.id}`} className="link-styled">
-                    {loan.borrower_name}
-                  </Link>
-                </td>
+                <td>{loan.borrower_name}</td>
                 <td style={{ textTransform: 'capitalize' }}>{loan.status}</td>
                 <td>{loan.requested_at?.slice(0, 10)}</td>
                 <td>{loan.due_date || '—'}</td>

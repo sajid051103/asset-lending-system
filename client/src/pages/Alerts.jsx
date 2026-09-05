@@ -31,13 +31,6 @@ export default function Alerts() {
     }
   }
 
-  function daysOverdue(dueDate) {
-    const due = new Date(dueDate);
-    const today = new Date();
-    const diffMs = today - due;
-    return Math.floor(diffMs / (1000 * 60 * 60 * 24));
-  }
-
   if (loading) return <div style={{ padding: '40px' }}>Loading alerts...</div>;
   if (error) return <div style={{ padding: '40px' }}>{error}</div>;
 
@@ -64,7 +57,10 @@ export default function Alerts() {
                 <td>{alert.item_title} ({alert.item_code})</td>
                 <td>{alert.borrower_name}</td>
                 <td>{alert.due_date}</td>
-                <td className="badge-overdue">{daysOverdue(alert.due_date)} days</td>
+                {/* days_overdue now comes straight from the backend (SQL
+                    CURRENT_DATE - due_date), not calculated here — avoids
+                    the timezone drift a JS Date diff would introduce. */}
+                <td className="badge-overdue">{alert.days_overdue} days</td>
                 <td>
                   <button onClick={() => handleDismiss(alert.id)}>Dismiss</button>
                 </td>

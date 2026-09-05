@@ -38,6 +38,7 @@ function getLastNWeekStarts(n) {
 export default function Dashboard() {
   const { user } = useAuth();
   const [data, setData] = useState(null);
+  const [myLimit, setMyLimit] = useState(null); // { activeCount, limit, atLimit }
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const isFirstLoad = useRef(true);
@@ -47,9 +48,22 @@ export default function Dashboard() {
 
     async function loadDashboard() {
       try {
-        const response = await api.get('/api/dashboard');
+        // For members, also pull their active-loan limit alongside the
+        // dashboard fetch, from the same endpoint Catalogue.jsx and
+        // ItemDetail.jsx use — one call, and the limit itself comes from
+        // the backend instead of being hardcoded here.
+        const requests = [api.get('/api/dashboard')];
+        if (user.role === 'member') {
+          requests.push(api.get('/api/loans/my-limit'));
+        }
+
+        const responses = await Promise.all(requests);
         if (cancelled) return;
-        setData(response.data);
+
+        setData(responses[0].data);
+        if (user.role === 'member') {
+          setMyLimit(responses[1].data);
+        }
         setError('');
       } catch (err) {
         if (cancelled) return;
@@ -108,6 +122,14 @@ export default function Dashboard() {
 
       {/* Headline numbers — visible to everyone */}
       <div className="stat-grid">
+        {user.role === 'member' && myLimit && (
+          <div className={`stat-card ${myLimit.atLimit ? 'stat-overdue' : ''}`}>
+            <span className="stat-number">
+              {myLimit.activeCount} / {myLimit.limit}
+            </span>
+            <span className="stat-label">Your Active Loans</span>
+          </div>
+        )}
         <div className="stat-card">
           <span className="stat-number">{headline.itemsOut}</span>
           <span className="stat-label">Items Currently Out</span>
