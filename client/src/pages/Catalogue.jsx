@@ -275,7 +275,19 @@ export default function Catalogue() {
         </div>
       )}
 
-      <div className="filters-bar" style={{ marginBottom: '16px' }}>
+      {/* FIX: removed space-between so search + archive-toggle sit close
+          together with a fixed gap, instead of being pushed to opposite
+          ends of the row. flexWrap keeps it tidy on narrow screens. */}
+      <div
+        className="filters-bar"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '16px',
+          flexWrap: 'wrap',
+          marginBottom: '16px',
+        }}
+      >
         <input
           placeholder="Search title, category or code..."
           value={search}
@@ -295,44 +307,68 @@ export default function Catalogue() {
         )}
       </div>
 
+      {/* FIX: Add Item form now lives in its own bordered card, clearly
+          separated from the filters row above and the CSV import below,
+          instead of visually blending into the same block. */}
       {showAddForm && (
-        <form onSubmit={handleAddItem} className="inline-form">
-          <input
-            placeholder="Title"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            required
-          />
-          <input
-            placeholder="Category"
-            value={category}
-            onChange={(e) => setCategory(e.target.value)}
-            required
-          />
-          <input
-            placeholder="Code"
-            value={code}
-            onChange={(e) => setCode(e.target.value)}
-            required
-          />
-          <button type="submit" disabled={addingItem}>
-            {addingItem ? 'Adding...' : 'Save'}
-          </button>
-          {formError && <p className="error-text">{formError}</p>}
-        </form>
+        <div
+          className="add-item-card"
+          style={{
+            border: '1px solid #ddd',
+            borderRadius: '8px',
+            padding: '16px',
+            marginBottom: '20px',
+            background: '#fafafa',
+          }}
+        >
+          <form onSubmit={handleAddItem} className="inline-form">
+            <input
+              placeholder="Title"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              required
+            />
+            <input
+              placeholder="Category"
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              required
+            />
+            <input
+              placeholder="Code"
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              required
+            />
+            <button type="submit" disabled={addingItem}>
+              {addingItem ? 'Adding...' : 'Save'}
+            </button>
+            {formError && <p className="error-text">{formError}</p>}
+          </form>
+        </div>
       )}
 
       {user.role === 'librarian' && (
-        <form onSubmit={handleCsvImport} className="inline-form" style={{ marginBottom: '20px' }}>
-          <input
-            type="file"
-            accept=".csv"
-            onChange={(e) => setCsvFile(e.target.files[0])}
-          />
-          <button type="submit" disabled={importing}>
-            {importing ? 'Importing...' : 'Import CSV'}
-          </button>
-        </form>
+        <div
+          className="csv-import-card"
+          style={{
+            border: '1px solid #ddd',
+            borderRadius: '8px',
+            padding: '16px',
+            marginBottom: '20px',
+          }}
+        >
+          <form onSubmit={handleCsvImport} className="inline-form">
+            <input
+              type="file"
+              accept=".csv"
+              onChange={(e) => setCsvFile(e.target.files[0])}
+            />
+            <button type="submit" disabled={importing}>
+              {importing ? 'Importing...' : 'Import CSV'}
+            </button>
+          </form>
+        </div>
       )}
 
       {importResult && (
