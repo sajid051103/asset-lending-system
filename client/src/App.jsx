@@ -12,12 +12,20 @@ import MyLoans from './pages/MyLoans';
 import ItemDetail from './pages/ItemDetail';
 import LoanDetail from './pages/LoanDetail';
 import Signup from './pages/Signup';
+import CreateLibrarian from './pages/CreateLibrarian';
 import './App.css';
 
 // Wrapper that blocks access if not logged in
 function ProtectedRoute({ children }) {
   const { user } = useAuth();
   if (!user) return <Navigate to="/login" replace />;
+  return children;
+}
+
+function LibrarianRoute({ children }) {
+  const { user } = useAuth();
+  if (!user) return <Navigate to="/login" replace />;
+  if (user.role !== 'librarian') return <Navigate to="/dashboard" replace />;
   return children;
 }
 
@@ -56,6 +64,14 @@ function AppRoutes() {
 <Route
   path="/signup"
   element={user ? <Navigate to="/dashboard" replace /> : <Signup />}
+/>
+<Route
+  path="/create-librarian"
+  element={
+    <LibrarianRoute>
+      <CreateLibrarian />
+    </LibrarianRoute>
+  }
 />
      <Route
   path="/dashboard"

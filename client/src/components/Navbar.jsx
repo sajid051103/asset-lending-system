@@ -47,6 +47,7 @@ export default function Navbar() {
               Alerts {alertCount > 0 && <span className="nav-badge">{alertCount}</span>}
             </Link>
             <Link to="/my-custodianships">My Custodianships</Link>
+            <Link to="/create-librarian">Create Librarian</Link>
           </>
         )}
 

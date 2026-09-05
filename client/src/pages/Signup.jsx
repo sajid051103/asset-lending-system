@@ -6,7 +6,6 @@ export default function Signup() {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [role, setRole] = useState('member');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -21,7 +20,7 @@ export default function Signup() {
     try {
       // Reuse the same axios instance directly for signup (no context method needed)
       const api = (await import('../api/axios')).default;
-      await api.post('/api/auth/signup', { name, email, password, role });
+      await api.post('/api/auth/signup', { name, email, password });
 
       // After successful signup, log them straight in
       await login(email, password);
@@ -71,18 +70,6 @@ export default function Signup() {
                 required
                 minLength={6}
               />
-            </label>
-
-            <label>
-              Role
-              <select
-                value={role}
-                onChange={(e) => setRole(e.target.value)}
-                className="auth-select"
-              >
-                <option value="member">Member</option>
-                <option value="librarian">Librarian</option>
-              </select>
             </label>
 
             {error && <p className="error-text">✕ {error}</p>}
