@@ -2,18 +2,16 @@ const express = require('express');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { query } = require('../../db/pool'); 
+const { requireAuth, requireRole } = require('../middleware/auth');
 const router = express.Router();
 
 
 router.post('/signup', async (req, res) => {
-  const { email, password, name, role } = req.body;
+  const { email, password, name } = req.body;
 
  
-  if (!email || !password || !name || !role) {
-    return res.status(400).json({ error: 'email, password, name and role are all required' });
-  }
-  if (role !== 'librarian' && role !== 'member') {
-    return res.status(400).json({ error: 'role must be either "librarian" or "member"' });
+  if (!email || !password || !name) {
+    return res.status(400).json({ error: 'email, password and name are all required' });
   }
 
   try {
@@ -23,7 +21,7 @@ router.post('/signup', async (req, res) => {
       `INSERT INTO users (email, password_hash, name, role)
        VALUES ($1, $2, $3, $4)
        RETURNING id, email, name, role, created_at`,
-      [email, password_hash, name, role]
+      [email, password_hash, name, 'member']
     );
 
     return res.status(201).json({ user: result.rows[0] });
@@ -34,6 +32,33 @@ router.post('/signup', async (req, res) => {
     }
     console.error('Signup error:', err);
     return res.status(500).json({ error: 'Something went wrong creating the account' });
+  }
+});
+
+// POST /api/auth/create-librarian — only librarians can create librarian accounts.
+router.post('/create-librarian', requireAuth, requireRole('librarian'), async (req, res) => {
+  const { email, password, name } = req.body;
+
+  if (!email || !password || !name) {
+    return res.status(400).json({ error: 'email, password and name are all required' });
+  }
+
+  try {
+    const password_hash = await bcrypt.hash(password, 10);
+    const result = await query(
+      `INSERT INTO users (email, password_hash, name, role)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, email, name, role, created_at`,
+      [email, password_hash, name, 'librarian']
+    );
+
+    return res.status(201).json({ user: result.rows[0] });
+  } catch (err) {
+    if (err.code === '23505') {
+      return res.status(409).json({ error: 'An account with this email already exists' });
+    }
+    console.error('Create librarian error:', err);
+    return res.status(500).json({ error: 'Something went wrong creating the librarian account' });
   }
 });
 
