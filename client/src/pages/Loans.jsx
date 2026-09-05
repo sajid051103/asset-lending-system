@@ -40,6 +40,37 @@ export default function Loans() {
   const [notice, setNotice] = useState(null); // { type: 'success' | 'error', message: string }
   const [sendingReminderId, setSendingReminderId] = useState(null);
 
+  // Send-reminder cooldown — mirrors the backend's 60-minute rule (see
+  // REMINDER_COOLDOWN_MINUTES in loans.js). Keyed by loan id, value is
+  // the timestamp (ms) at which the button re-enables. This is purely
+  // client-side UX sugar so a librarian sees a countdown instead of
+  // hammering the button into a 429 — the server is still the actual
+  // source of truth and re-checks this on every request regardless of
+  // what the button shows (e.g. after a page refresh, this state resets
+  // and the server will correctly reject an early resend anyway).
+  const [reminderCooldowns, setReminderCooldowns] = useState({});
+
+  // Ticks once a second so the cooldown countdown text actually counts
+  // down instead of only updating on the next unrelated re-render.
+  const [, forceTick] = useState(0);
+  useEffect(() => {
+    const interval = setInterval(() => forceTick((t) => t + 1), 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  function getRemainingSeconds(loanId) {
+    const until = reminderCooldowns[loanId];
+    if (!until) return 0;
+    const remaining = Math.ceil((until - Date.now()) / 1000);
+    return remaining > 0 ? remaining : 0;
+  }
+
+  function formatCooldown(totalSeconds) {
+    const m = Math.floor(totalSeconds / 60);
+    const s = totalSeconds % 60;
+    return `${m}:${String(s).padStart(2, '0')}`;
+  }
+
   function showNotice(type, message) {
     setNotice({ type, message });
   }
@@ -175,8 +206,28 @@ export default function Loans() {
     try {
       await api.post(`/api/loans/${loanId}/send-reminder`, {});
       showNotice('success', 'Reminder email sent to the borrower.');
+      // Start a 60-minute client-side cooldown so the button immediately
+      // reflects the same window the backend just started enforcing.
+      setReminderCooldowns((prev) => ({
+        ...prev,
+        [loanId]: Date.now() + 60 * 60 * 1000,
+      }));
     } catch (err) {
-      showNotice('error', err.response?.data?.error || 'Could not send the reminder email.');
+      const message = err.response?.data?.error || 'Could not send the reminder email.';
+      showNotice('error', message);
+
+      // If the backend rejected this as a cooldown violation (429), pull
+      // the "X more minute(s)" figure out of its message so the button's
+      // countdown matches what the server is actually enforcing, instead
+      // of guessing or leaving the button clickable again immediately.
+      if (err.response?.status === 429) {
+        const match = message.match(/wait (\d+) more minute/i);
+        const minutesRemaining = match ? parseInt(match[1], 10) : 60;
+        setReminderCooldowns((prev) => ({
+          ...prev,
+          [loanId]: Date.now() + minutesRemaining * 60 * 1000,
+        }));
+      }
     } finally {
       setSendingReminderId(null);
     }
@@ -224,8 +275,21 @@ export default function Loans() {
 
   const totalPages = Math.ceil(total / 10) || 1;
 
+  // Local calendar date as YYYY-MM-DD — NOT new Date().toISOString(), which
+  // converts to UTC first and can land on the wrong day depending on the
+  // browser's timezone and time of day. due_date is a plain DATE with no
+  // time component, so comparing it against the viewer's own local "today"
+  // is what actually matches what they'd expect to see.
+  function todayLocalDate() {
+    const d = new Date();
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
   function isOverdue(loan) {
-    return loan.status === 'issued' && loan.due_date && loan.due_date < new Date().toISOString().slice(0, 10);
+    return loan.status === 'issued' && loan.due_date && loan.due_date < todayLocalDate();
   }
 
   if (error) return <div style={{ padding: '40px' }}>{error}</div>;
@@ -376,7 +440,7 @@ export default function Loans() {
                           <input
                             type="date"
                             value={dueDateInput}
-                            min={new Date().toISOString().slice(0, 10)}
+                            min={todayLocalDate()}
                             onChange={(e) => setDueDateInput(e.target.value)}
                           />
                           <button onClick={() => handleIssue(loan.id)}>Confirm</button>
@@ -389,9 +453,18 @@ export default function Loans() {
                           <button onClick={() => openLostForm(loan.id)}>Mark Lost</button>
                           <button
                             onClick={() => handleSendReminder(loan.id)}
-                            disabled={sendingReminderId === loan.id}
+                            disabled={sendingReminderId === loan.id || getRemainingSeconds(loan.id) > 0}
+                            title={
+                              getRemainingSeconds(loan.id) > 0
+                                ? 'A reminder was already sent recently for this loan'
+                                : undefined
+                            }
                           >
-                            {sendingReminderId === loan.id ? 'Sending...' : 'Send Reminder'}
+                            {sendingReminderId === loan.id
+                              ? 'Sending...'
+                              : getRemainingSeconds(loan.id) > 0
+                              ? `Wait ${formatCooldown(getRemainingSeconds(loan.id))}`
+                              : 'Send Reminder'}
                           </button>
                         </>
                       )}

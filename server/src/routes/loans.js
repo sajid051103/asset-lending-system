@@ -20,6 +20,11 @@ async function logEvent(loan_id, event_type, actor_id, note = null) {
 // the README only asks for the concept, not per-user customisation.
 const MAX_ACTIVE_LOANS_PER_MEMBER = 3;
 
+// STRETCH: send-reminder cooldown — a librarian can't re-send a reminder
+// for the same loan more than once every 60 minutes. Prevents accidental
+// spam from repeated clicks/requests.
+const REMINDER_COOLDOWN_MINUTES = 60;
+
 // POST /api/loans — request or directly create a loan
 // Members: creates a "requested" loan (no due date yet)
 // Librarians: can also directly create+issue in one step if they pass a due_date
@@ -253,6 +258,12 @@ router.patch('/:id/lost', requireAuth, requireRole('librarian'), async (req, res
 // POST /api/loans/:id/send-reminder — STRETCH: email a reminder to the
 // borrower on an issued loan. Librarian-only, matching the pattern used
 // by issue/return/lost above (server-enforced role check, not just UI).
+//
+// STRETCH: 60-minute cooldown — reuses loan_events (event_type = 'note',
+// note = 'Reminder email sent to borrower') to find the last time a
+// reminder was actually sent for this loan, rather than adding a new
+// column just to track this. If a reminder went out inside the cooldown
+// window, the request is rejected with 429 before touching the mailer.
 router.post('/:id/send-reminder', requireAuth, requireRole('librarian'), async (req, res) => {
   const { id } = req.params;
 
@@ -269,6 +280,32 @@ router.post('/:id/send-reminder', requireAuth, requireRole('librarian'), async (
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'No issued loan found with this id' });
+    }
+
+    // Cooldown check — look up the most recent "reminder sent" event for
+    // this loan and compare it against CURRENT_TIMESTAMP in the same
+    // query, so we're consistent with the DB's clock (same reasoning as
+    // the CURRENT_DATE guards above) rather than mixing in Node's Date.
+    const cooldownResult = await query(
+      `SELECT created_at,
+              EXTRACT(EPOCH FROM (now() - created_at)) / 60 AS minutes_since
+       FROM loan_events
+       WHERE loan_id = $1
+         AND event_type = 'note'
+         AND note = 'Reminder email sent to borrower'
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [id]
+    );
+
+    if (cooldownResult.rows.length > 0) {
+      const minutesSince = parseFloat(cooldownResult.rows[0].minutes_since);
+      if (minutesSince < REMINDER_COOLDOWN_MINUTES) {
+        const minutesRemaining = Math.ceil(REMINDER_COOLDOWN_MINUTES - minutesSince);
+        return res.status(429).json({
+          error: `A reminder was already sent ${Math.floor(minutesSince)} minute(s) ago. Please wait ${minutesRemaining} more minute(s) before resending.`,
+        });
+      }
     }
 
     const loan = result.rows[0];
