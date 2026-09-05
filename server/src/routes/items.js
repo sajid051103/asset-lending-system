@@ -29,17 +29,73 @@ router.post('/', requireAuth, requireRole('librarian'), async (req, res) => {
   }
 });
 
-// GET /api/items — list catalogue items (default: only non-archived)
-// Query param ?includeArchived=true shows everything
+// GET /api/items — list catalogue items (default: only non-archived), paginated
+// Query params:
+//   ?includeArchived=true  — include archived items
+//   ?search=...            — text search over title, category, code (server-side,
+//                             so it matches across the whole catalogue, not just
+//                             whatever page happens to be loaded)
+//   ?page=1&limit=20
+//
+// Each item also carries has_open_loan (true if it currently has a
+// requested/issued loan against it) — the frontend uses this to hide the
+// Request button on items a member can't actually request right now,
+// instead of letting them click Request and get a 409 back.
 router.get('/', requireAuth, async (req, res) => {
   const includeArchived = req.query.includeArchived === 'true';
+  const search = req.query.search?.trim();
+  const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+  const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100); // cap at 100 per page
+  const offset = (page - 1) * limit;
+
+  const conditions = [];
+  const params = [];
+  let paramIndex = 1;
+
+  if (!includeArchived) {
+    conditions.push('catalogue_items.is_archived = false');
+  }
+
+  if (search) {
+    conditions.push(
+      `(catalogue_items.title ILIKE $${paramIndex} OR catalogue_items.category ILIKE $${paramIndex} OR catalogue_items.code ILIKE $${paramIndex})`
+    );
+    params.push(`%${search}%`);
+    paramIndex++;
+  }
+
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
   try {
-    const result = includeArchived
-      ? await query('SELECT * FROM catalogue_items ORDER BY title ASC')
-      : await query('SELECT * FROM catalogue_items WHERE is_archived = false ORDER BY title ASC');
+    const dataQuery = `
+      SELECT catalogue_items.*,
+             EXISTS (
+               SELECT 1 FROM loans
+               WHERE loans.item_id = catalogue_items.id
+                 AND loans.status IN ('requested', 'issued')
+             ) AS has_open_loan
+      FROM catalogue_items
+      ${whereClause}
+      ORDER BY catalogue_items.title ASC
+      LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+    `;
+    const dataParams = [...params, limit, offset];
 
-    return res.json({ items: result.rows });
+    const countQuery = `SELECT COUNT(*) AS total FROM catalogue_items ${whereClause}`;
+
+    const [dataResult, countResult] = await Promise.all([
+      query(dataQuery, dataParams),
+      query(countQuery, params),
+    ]);
+
+    const total = parseInt(countResult.rows[0].total, 10);
+
+    return res.json({
+      items: dataResult.rows,
+      total,
+      page,
+      totalPages: Math.max(Math.ceil(total / limit), 1),
+    });
   } catch (err) {
     console.error('List items error:', err);
     return res.status(500).json({ error: 'Something went wrong fetching items' });
